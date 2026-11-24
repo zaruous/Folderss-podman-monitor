@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
+using PodmanMonitor.Ssh;
 
 namespace PodmanMonitor.Monitoring
 {
@@ -39,9 +40,61 @@ namespace PodmanMonitor.Monitoring
             "  if [ \"$2\" = true ]; then m=\"$m · rootless\"; else m=\"$m · rootful\"; fi",
             "  m=\"$m · cgroup $3\"",
             "  [ \"$2\" = true ] && [ \"$3\" = v1 ] && m=\"$m (rootless + cgroup v1 이라 컨테이너 CPU·메모리 통계를 볼 수 없습니다)\"",
-            "  echo \"@@OK@@ $(hostname) · $m\"",
+            // hostname 명령이 없는 배포판도 있다(podman machine 의 Fedora 등) — uname -n 은 어디에나 있다
+            "  echo \"@@OK@@ $(uname -n) · $m\"",
             "else echo \"podman 을 실행하지 못했습니다: $(podman info 2>&1 | grep -m1 -i error)\"; fi",
         });
+
+        // ---------- Windows(PowerShell) ----------
+        // Windows OpenSSH 의 로그인 셸은 cmd(또는 PowerShell)라 sh 스크립트가 돌지 않는다.
+        // 같은 일을 PowerShell 5.1 스크립트로 하고, 출력은 Linux 와 같은 표시·줄 형식으로 내서 해석기는 그대로 쓴다.
+        // podman.exe 는 podman machine(WSL VM)에 붙으므로 JSON 은 Linux 와 같다.
+
+        /// <summary>모든 Windows 스크립트 앞부분: UTF-8(BOM 없이) 출력, podman 실행 도우미(표준 출력·오류를 나눠 받는다).</summary>
+        const string PsPrelude = @"$ErrorActionPreference='Continue';$ProgressPreference='SilentlyContinue'
+[Console]::OutputEncoding=New-Object Text.UTF8Encoding $false
+function Invoke-Podman{$o=& podman @args 2>&1;$c=$LASTEXITCODE
+$e=@($o|?{$_ -is [Management.Automation.ErrorRecord]}|%{""$_""});$s=@($o|?{$_ -isnot [Management.Automation.ErrorRecord]}|%{""$_""})
+@{ok=($c -eq 0);code=$c;out=($s -join ""`n"");err=$e}}
+";
+
+        const string PsCollect = @"if(-not(Get-Command podman -EA 0)){'" + ErrMark + @" 서버에 podman 이 없습니다';exit}
+$r=Invoke-Podman ps -a --pod --format json
+if($r.ok){'" + PsMark + @"';$r.out}else{""" + ErrMark + @" podman ps 실패: $(($r.err|select -f 3) -join ' ')""}
+$r=Invoke-Podman stats --no-stream --format '{{json .}}'
+if($r.ok){'" + StatsMark + @"';$r.out}else{$m=@($r.err|?{$_ -match 'error'})+$r.err|select -f 1;""" + WarnMark + @" 컨테이너 통계를 읽지 못했습니다: $m""}
+'" + HostMark + @"'
+$c=Get-CimInstance Win32_PerfRawData_PerfOS_Processor -Filter ""Name='_Total'""
+""cpu $($c.PercentUserTime) 0 $($c.PercentPrivilegedTime) $($c.PercentIdleTime) 0 0 0 0""
+$m=Get-CimInstance Win32_OperatingSystem
+""MemTotal: $($m.TotalVisibleMemorySize) kB"";""MemAvailable: $($m.FreePhysicalMemory) kB""
+[Environment]::ProcessorCount
+'" + DiskMark + @"'
+Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3'|?{$_.Size}|%{$u=$_.Size-$_.FreeSpace;""$($_.DeviceID) $($_.Size) $u $($_.FreeSpace) $([int](100*$u/$_.Size))% $($_.DeviceID)\""}
+";
+        // /proc/stat 자리: user nice system idle iowait irq softirq steal — 성능 카운터의 사용자·커널·유휴 시간(100ns 누적)을 넣는다.
+        // load average 는 Windows 에 없어 내지 않는다.
+
+        const string PsProbe = @"if(-not(Get-Command podman -EA 0)){'서버에 podman 이 없습니다';exit}
+$r=Invoke-Podman info --format '{{.Version.Version}} {{.Host.Security.Rootless}} {{.Host.CgroupsVersion}}'
+if($r.ok){$v,$rl,$cg=$r.out.Trim() -split ' +';$m=""Podman $v""
+if($rl -eq 'true'){$m+=' · rootless'}else{$m+=' · rootful'};$m+="" · cgroup $cg""
+if($rl -eq 'true' -and $cg -eq 'v1'){$m+=' (rootless + cgroup v1 이라 컨테이너 CPU·메모리 통계를 볼 수 없습니다)'}
+""@@OK@@ $env:COMPUTERNAME · Windows · $m""}else{""podman 을 실행하지 못했습니다: $(@($r.err|?{$_ -match 'error'})+$r.err|select -f 1)""}
+";
+
+        /// <summary>Windows 에서 실행할 명령: PowerShell 스크립트를 UTF-16 base64 로 넘긴다(cmd·PowerShell 어느 로그인 셸에서도 같다).</summary>
+        public static string PowerShell(string script)
+        {
+            var command = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " +
+                Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(PsPrelude + script.Replace("\r", "")));
+            // cmd 한 줄은 8191자까지
+            if (command.Length > 8000) throw new ArgumentException("한 번에 보내기에 명령이 너무 깁니다. 컨테이너를 나눠서 조작하세요.");
+            return command;
+        }
+
+        public static string CollectFor(RemoteOs os) => os == RemoteOs.Windows ? PowerShell(PsCollect) : Collect;
+        public static string ProbeFor(RemoteOs os) => os == RemoteOs.Windows ? PowerShell(PsProbe) : Probe;
 
         public const string ComposeProjectLabel = "com.docker.compose.project";
         public const string ComposeServiceLabel = "com.docker.compose.service";
@@ -60,7 +113,7 @@ namespace PodmanMonitor.Monitoring
         /// podman 은 이미 그 상태여도(멈춘 것을 stop) 0 으로 끝난다. 실패 이유는 표준 오류로 나온다.
         /// id 는 podman 이 준 16진수만 받는다 — 셸에 그대로 들어가므로.
         /// </summary>
-        public static string ContainerSteps(IEnumerable<ContainerStep> steps)
+        public static string ContainerSteps(IEnumerable<ContainerStep> steps, RemoteOs os = RemoteOs.Posix)
         {
             var list = steps.ToList();
             if (list.Count == 0) throw new ArgumentException("조작할 컨테이너가 없습니다");
@@ -68,6 +121,16 @@ namespace PodmanMonitor.Monitoring
             {
                 if (!Actions.Contains(s.Action)) throw new ArgumentException("지원하지 않는 조작: " + s.Action);
                 if (string.IsNullOrEmpty(s.Id) || !s.Id.All(Uri.IsHexDigit)) throw new ArgumentException("컨테이너 id 가 올바르지 않습니다");
+            }
+            if (os == RemoteOs.Windows)
+            {
+                // cmd 한 줄 길이 제한 때문에 id 는 앞 12자리만(podman 은 겹치지 않는 앞부분을 받는다). 결과는 순서로 맞추므로 상관없다
+                var items = string.Join(",", list.Select(s => "'" + s.Id.Substring(0, Math.Min(12, s.Id.Length)) + ":" + s.Action + "'"));
+                return PowerShell(@"foreach($x in @(" + items + @")){$id,$a=$x -split ':',2
+if($a -eq '" + ComposeOrder.WaitHealthy + @"'){$r='timeout';for($i=0;$i -lt " + HealthWaitSeconds + @";$i++){$null=& podman healthcheck run $id 2>&1;if($LASTEXITCODE -eq 0){$r='healthy';break};Start-Sleep 1}}
+else{$o=Invoke-Podman $a $id;if($o.ok){$r='ok'}else{$r=""exit$($o.code)"";[Console]::Error.WriteLine(($o.err -join ' '))}}
+""$id $a $r""}
+");
             }
             return string.Join("\n", new[]
             {
@@ -105,7 +168,14 @@ namespace PodmanMonitor.Monitoring
         /// <summary>단계 결과가 성공인지(ok, healthy).</summary>
         public static bool StepSucceeded(string result) => result == "ok" || result == "healthy";
 
-        public static string Logs(string id, int tail) => $"podman logs --tail {tail} --timestamps {id} 2>&1";
+        public static string Logs(string id, int tail, RemoteOs os = RemoteOs.Posix)
+        {
+            if (string.IsNullOrEmpty(id) || !id.All(Uri.IsHexDigit)) throw new ArgumentException("컨테이너 id 가 올바르지 않습니다");
+            // Windows: 표준 오류(컨테이너의 stderr 로그)도 순서대로 한 줄씩 문자열로
+            return os == RemoteOs.Windows
+                ? PowerShell($"& podman logs --tail {tail} --timestamps {id} 2>&1|%{{\"$_\"}}")
+                : $"podman logs --tail {tail} --timestamps {id} 2>&1";
+        }
 
         /// <summary>원시 출력을 구획별로 나눈다.</summary>
         public sealed class Sections
@@ -137,7 +207,7 @@ namespace PodmanMonitor.Monitoring
                 buf.Clear();
             }
 
-            foreach (var raw in (output ?? "").Replace("\r", "").Split('\n'))
+            foreach (var raw in (output ?? "").Replace("\r", "").TrimStart('﻿').Split('\n'))
             {
                 if (raw.StartsWith(ErrMark)) { s.Errors.Add(raw.Substring(ErrMark.Length).Trim()); continue; }
                 if (raw.StartsWith(WarnMark)) { s.Warnings.Add(raw.Substring(WarnMark.Length).Trim()); continue; }
@@ -202,7 +272,7 @@ namespace PodmanMonitor.Monitoring
                 var ip = Str(p, "host_ip");
                 var proto = Str(p, "protocol");
                 string Span(int start) => range > 1 ? $"{start}-{start + range - 1}" : start.ToString(CultureInfo.InvariantCulture);
-                items.Add($"{(ip == "0.0.0.0" || ip == "" ? "" : ip + ":")}{Span(pub)}→{Span(priv)}/{proto}");
+                items.Add($"{(ip == "0.0.0.0" || ip == "::" || ip == "" ? "" : ip + ":")}{Span(pub)}→{Span(priv)}/{proto}");
             }
             return string.Join(", ", items.Distinct());
         }
@@ -287,9 +357,9 @@ namespace PodmanMonitor.Monitoring
             };
         }
 
-        /// <summary>LC_ALL=C df -P -B1: 장치 크기 사용 가용 용량% 마운트(공백 포함 가능).</summary>
+        /// <summary>LC_ALL=C df -P -B1: 장치 크기 사용 가용 용량% 마운트(공백 포함 가능). Windows 스크립트는 장치 자리에 드라이브(C:)를 같은 형식으로 낸다.</summary>
         public static List<DiskInfo> ParseDf(IEnumerable<string> lines) =>
-            lines.Where(l => l.StartsWith("/"))
+            lines.Where(l => l.StartsWith("/") || (l.Length > 2 && char.IsLetter(l[0]) && l[1] == ':' && l[2] == ' '))
                 .Select(l => l.Split(' ', StringSplitOptions.RemoveEmptyEntries))
                 .Where(f => f.Length >= 6)
                 .Select(f => new DiskInfo

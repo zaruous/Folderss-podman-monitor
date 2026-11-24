@@ -30,8 +30,13 @@ namespace PodmanMonitor.Monitoring
         public async Task<Snapshot> CollectAsync(SshConnection ssh, CancellationToken ct = default)
         {
             var sw = Stopwatch.StartNew();
-            var result = await ssh.RunAsync(RemoteScript.Collect, TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
+            var result = await ssh.RunAsync(RemoteScript.CollectFor, TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
             sw.Stop();
+            var sec = RemoteScript.Split(result.Output);
+            // 표시가 하나도 없으면 스크립트가 돌지 못한 것(셸이 다르거나 막힘) — 빈 목록으로 보이지 않게 이유를 알린다
+            if (sec.ContainersJson == null && sec.Errors.Count == 0)
+                throw new InvalidOperationException("서버 응답을 해석하지 못했습니다: " +
+                    Shorten((result.Error + " " + result.Output).Trim(), $"응답 없음(종료 코드 {result.ExitCode})"));
             var snap = Build(result.Output, DateTime.Now);
             snap.ElapsedMs = sw.ElapsedMilliseconds;
             return snap;
@@ -118,6 +123,9 @@ namespace PodmanMonitor.Monitoring
                 Add(TotalCpu, new Sample(t, withStats.Sum(c => c.CpuPercent ?? 0)));
             Add(TotalMem, new Sample(t, withStats.Sum(c => c.MemPercent)));
         }
+
+        private static string Shorten(string s, string empty) =>
+            s.Length == 0 ? empty : s.Length > 200 ? s.Substring(0, 200) + "…" : s;
 
         private static void Add(List<Sample> list, Sample s)
         {

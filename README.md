@@ -37,13 +37,23 @@ Folderss(플러그인) ──SSH 연결 1개 유지(SSH.NET)──▶ 서버 (�
 - **조작**: `podman start|stop|restart <id>`. 이미 그 상태여도 podman은 성공으로 끝납니다. 실패하면 상태줄에 종료 코드와 podman 오류 문구가 나옵니다.
 - **healthy 대기**(compose `service_healthy` 의존): 상태를 읽기만 하지 않고 `podman healthcheck run`으로 검사를 직접 돌립니다(최대 90초). podman의 주기 검사는 systemd 타이머로 돌아서, systemd 사용자 세션이 없으면(rootless 계정에 linger가 꺼져 있는 등) 상태가 계속 `starting`에 머물기 때문입니다.
 
+### Windows 서버
+
+접속하면 먼저 `uname -s`를 실행해 봅니다. 되면 Linux(sh), 안 되면 Windows로 보고 같은 일을 하는 PowerShell 5.1 스크립트를 `powershell -EncodedCommand`로 보냅니다(cmd 한 줄 8191자 제한 안).
+
+- 컨테이너: `podman.exe`가 podman machine(WSL VM)에 붙으므로 JSON은 Linux와 같습니다. VM이 꺼져 있으면 podman 오류가 상태줄에 나옵니다(`podman machine start`).
+- 호스트 CPU: 성능 카운터(`Win32_PerfRawData_PerfOS_Processor`)의 사용자·커널·유휴 시간 차이. iowait·load average는 없습니다.
+- 메모리·디스크: `Win32_OperatingSystem`, `Win32_LogicalDisk`(로컬 드라이브).
+- 컨테이너 CPU %는 Windows 호스트 코어 수 기준입니다(VM에 준 코어 수가 아님).
+- 여러 컨테이너를 한 번에 조작할 때 명령 길이 때문에 id는 앞 12자리만 씁니다. 너무 많으면(약 90단계 넘음) 나눠서 조작하라고 알립니다.
+
 ## 요구 사항
 
 | 항목 | 내용 |
 |---|---|
 | 접속 | **키 인증**(암호 없는 개인키). `~/.ssh/config` 의 `Host` 별칭을 쓰면 `HostName`·`User`·`Port`·`IdentityFile`을 읽습니다. 별칭이 없으면 입력값을 호스트로, 기본 키(`id_ed25519`·`id_ecdsa`·`id_rsa`)를 씁니다 |
 | 서버 키 | `~/.ssh/known_hosts`에 있어야 합니다(평문·해시 형식 모두). 없으면 연결을 거부하니 먼저 터미널에서 `ssh <별칭>`으로 한 번 접속해 두세요 |
-| 서버 | Linux, Podman 4 이상(4.9.3에서 확인), 로그인 셸이 sh 호환(bash·dash 확인) |
+| 서버 | **Linux**: Podman 4 이상(4.9.3에서 확인), 로그인 셸이 sh 호환(bash·dash 확인)<br>**Windows**: OpenSSH 서버 + Podman for Windows(podman machine, 6.2.0에서 확인). 로그인 셸은 cmd·PowerShell 어느 것이든 됩니다 |
 | 통계 | rootless는 **cgroup v2**가 있어야 CPU·메모리 통계가 나옵니다(cgroup v1이면 목록·조작·호스트 지표만, 상태줄에 이유 표시). [연결 시험]이 rootless/rootful·cgroup 버전을 알려 줍니다 |
 
 지원하지 않는 것: 암호 인증, 암호 걸린 개인키, Windows ssh-agent, `~/.ssh/config`의 `Match`·`Include`·`ProxyJump`, `sudo`(아래 참고).

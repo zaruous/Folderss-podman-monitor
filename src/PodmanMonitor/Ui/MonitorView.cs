@@ -674,6 +674,7 @@ namespace PodmanMonitor.Ui
             if (h.CpuPercent.HasValue) parts.Add($"호스트 CPU {h.CpuPercent:0.#}%");
             if (h.MemTotal > 0) parts.Add($"메모리 {h.MemPercent:0.#}% ({Format.Bytes(h.MemTotal - h.MemAvailable)}/{Format.Bytes(h.MemTotal)})");
             if (!string.IsNullOrEmpty(h.LoadAverage)) parts.Add($"load {h.LoadAverage} ({h.Cores}코어)");
+            else if (h.MemTotal > 0) parts.Add($"{h.Cores}코어"); // Windows 에는 load average 가 없다
             parts.Add($"컨테이너 실행 {snap.Containers.Count(c => c.State == "running")} / 전체 {snap.Containers.Count}");
             _summary.Text = string.Join(" · ", parts);
 
@@ -747,7 +748,7 @@ namespace PodmanMonitor.Ui
                 // 한 채널에서 차례로 — 조작당 최대 60초, 건강 대기는 최대 HealthWaitSeconds
                 int waits = steps.Count(s => s.Action == ComposeOrder.WaitHealthy);
                 var timeout = TimeSpan.FromSeconds(30 + 60 * (steps.Count - waits) + RemoteScript.HealthWaitSeconds * waits);
-                var r = await ssh.RunAsync(RemoteScript.ContainerSteps(steps), timeout);
+                var r = await ssh.RunAsync(os => RemoteScript.ContainerSteps(steps, os), timeout);
                 var results = RemoteScript.ParseStepResults(r.Output);
 
                 var failed = new System.Collections.Generic.List<string>();
@@ -803,7 +804,7 @@ namespace PodmanMonitor.Ui
             {
                 if (!(_grid.SelectedItem is ContainerRow row) || _ssh == null) return;
                 _status.Text = $"{row.Name} 로그 조회 중...";
-                var r = await _ssh.RunAsync(RemoteScript.Logs(row.Id, 200), TimeSpan.FromSeconds(30));
+                var r = await _ssh.RunAsync(os => RemoteScript.Logs(row.Id, 200, os), TimeSpan.FromSeconds(30));
                 _status.Text = $"{row.Name} 로그 조회 완료";
                 LogWindow.Show(Window.GetWindow(this), row.Name, r.Output);
             }
