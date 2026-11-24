@@ -12,8 +12,12 @@ namespace PodmanMonitor.Monitoring
         public string State { get; set; }
         public string Status { get; set; }
         public string Ports { get; set; }
-        /// <summary>docker compose 프로젝트 이름(라벨 com.docker.compose.project). compose 로 띄운 것이 아니면 빈 문자열.</summary>
+        /// <summary>compose 프로젝트 이름(라벨 com.docker.compose.project, podman-compose 는 io.podman.compose.project 도). compose 로 띄운 것이 아니면 빈 문자열.</summary>
         public string Project { get; set; } = "";
+        /// <summary>속한 podman pod 이름. pod 에 없으면 빈 문자열.</summary>
+        public string Pod { get; set; } = "";
+        /// <summary>표 묶음 이름: compose 프로젝트가 있으면 그것, 없고 pod 에 속하면 "이름 (pod)", 둘 다 없으면 빈 문자열.</summary>
+        public string Group => !string.IsNullOrEmpty(Project) ? Project : !string.IsNullOrEmpty(Pod) ? Pod + " (pod)" : "";
         /// <summary>compose 서비스 이름(라벨 com.docker.compose.service).</summary>
         public string Service { get; set; } = "";
         /// <summary>compose 의존(라벨 com.docker.compose.depends_on).</summary>
@@ -22,7 +26,7 @@ namespace PodmanMonitor.Monitoring
         public bool HasStats { get; set; }
         /// <summary>호스트 전체 대비 CPU % (100 = 모든 코어). 첫 표본은 비교 대상이 없어 null.</summary>
         public double? CpuPercent { get; set; }
-        /// <summary>사용 코어 수(= docker stats 의 CPU % / 100).</summary>
+        /// <summary>사용 코어 수(= podman stats 의 CPU % / 100).</summary>
         public double? CpuCores { get; set; }
         public long MemUsed { get; set; }
         public long MemLimit { get; set; }
@@ -63,6 +67,8 @@ namespace PodmanMonitor.Monitoring
         public List<ContainerInfo> Containers { get; } = new List<ContainerInfo>();
         public HostInfo Host { get; set; }
         public List<DiskInfo> Disks { get; } = new List<DiskInfo>();
+        /// <summary>조회는 됐지만 일부를 읽지 못한 이유(예: rootless + cgroup v1 이라 컨테이너 통계 없음). 상태줄에 보인다.</summary>
+        public List<string> Warnings { get; } = new List<string>();
         /// <summary>원격 명령 수행 시간(ms).</summary>
         public long ElapsedMs { get; set; }
     }

@@ -242,10 +242,10 @@ namespace PodmanMonitor.Ui
             try
             {
                 using var ssh = new SshConnection(h);
-                var r = await ssh.RunAsync(RemoteScript.Probe, TimeSpan.FromSeconds(20));
+                var r = await ssh.RunAsync(RemoteScript.ProbeFor, TimeSpan.FromSeconds(20));
                 _message.Text = r.Output.Contains("@@OK@@")
                     ? $"연결 성공 — {r.Output.Replace("@@OK@@", "").Trim()}"
-                    : "연결은 됐지만 Docker 를 쓸 수 없습니다: " + (r.Output + " " + r.Error).Trim();
+                    : "연결은 됐지만 podman 을 쓸 수 없습니다: " + (r.Output + " " + r.Error).Trim();
             }
             catch (Exception ex)
             {

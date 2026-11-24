@@ -17,7 +17,7 @@ namespace PodmanMonitor.Monitoring
         public const int MaxSamples = 3600;
 
         private long[] _prevHostCpu;
-        private readonly Dictionary<string, (long cpu, long sys)> _prevContainerCpu = new Dictionary<string, (long, long)>();
+        private readonly Dictionary<string, (long cpu, long time)> _prevContainerCpu = new Dictionary<string, (long, long)>();
 
         public List<Sample> HostCpu { get; } = new List<Sample>();
         public List<Sample> HostIoWait { get; } = new List<Sample>();
@@ -30,8 +30,13 @@ namespace PodmanMonitor.Monitoring
         public async Task<Snapshot> CollectAsync(SshConnection ssh, CancellationToken ct = default)
         {
             var sw = Stopwatch.StartNew();
-            var result = await ssh.RunAsync(RemoteScript.Collect, TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
+            var result = await ssh.RunAsync(RemoteScript.CollectFor, TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
             sw.Stop();
+            var sec = RemoteScript.Split(result.Output);
+            // 표시가 하나도 없으면 스크립트가 돌지 못한 것(셸이 다르거나 막힘) — 빈 목록으로 보이지 않게 이유를 알린다
+            if (sec.ContainersJson == null && sec.Errors.Count == 0)
+                throw new InvalidOperationException("서버 응답을 해석하지 못했습니다: " +
+                    Shorten((result.Error + " " + result.Output).Trim(), $"응답 없음(종료 코드 {result.ExitCode})"));
             var snap = Build(result.Output, DateTime.Now);
             snap.ElapsedMs = sw.ElapsedMilliseconds;
             return snap;
@@ -45,6 +50,7 @@ namespace PodmanMonitor.Monitoring
                 throw new InvalidOperationException(string.Join(" / ", sec.Errors));
 
             var snap = new Snapshot { Time = now };
+            snap.Warnings.AddRange(sec.Warnings);
 
             // 호스트
             var host = RemoteScript.ParseHost(sec.HostLines);
@@ -75,15 +81,15 @@ namespace PodmanMonitor.Monitoring
                     c.Pids = s.Pids;
                     if (_prevContainerCpu.TryGetValue(c.Id, out var prev))
                     {
-                        long dCpu = s.CpuTotal - prev.cpu, dSys = s.SystemCpu - prev.sys;
-                        if (dSys > 0 && dCpu >= 0)
+                        // 컨테이너 CPU 시간(모든 코어 합) 증가분 / 지난 실제 시간 = 사용 코어 수. 코어 수로 나누면 호스트 전체 대비 %
+                        long dCpu = s.CpuNano - prev.cpu, dTime = s.SampleNano - prev.time;
+                        if (dTime > 0 && dCpu >= 0)
                         {
-                            // system_cpu_usage 는 모든 코어의 합 — 비율이 곧 호스트 전체 대비 사용률
-                            c.CpuPercent = 100.0 * dCpu / dSys;
-                            c.CpuCores = (double)dCpu / dSys * Math.Max(1, s.OnlineCpus);
+                            c.CpuCores = (double)dCpu / dTime;
+                            c.CpuPercent = 100.0 * c.CpuCores / Math.Max(1, host.Cores);
                         }
                     }
-                    _prevContainerCpu[c.Id] = (s.CpuTotal, s.SystemCpu);
+                    _prevContainerCpu[c.Id] = (s.CpuNano, s.SampleNano);
                 }
                 snap.Containers.Add(c);
             }
@@ -117,6 +123,9 @@ namespace PodmanMonitor.Monitoring
                 Add(TotalCpu, new Sample(t, withStats.Sum(c => c.CpuPercent ?? 0)));
             Add(TotalMem, new Sample(t, withStats.Sum(c => c.MemPercent)));
         }
+
+        private static string Shorten(string s, string empty) =>
+            s.Length == 0 ? empty : s.Length > 200 ? s.Substring(0, 200) + "…" : s;
 
         private static void Add(List<Sample> list, Sample s)
         {

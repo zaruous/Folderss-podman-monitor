@@ -124,7 +124,7 @@ namespace PodmanMonitor.Ui
             bar.Children.Add(refresh);
 
             _groupBox.Margin = new Thickness(12, 0, 0, 0);
-            _groupBox.ToolTip = "compose 프로젝트별로 묶어 보여 줍니다. 머리줄을 누르면 접고 펍니다.";
+            _groupBox.ToolTip = "compose 프로젝트별로, compose 가 아니면 pod 별로 묶어 보여 줍니다. 머리줄을 누르면 접고 펍니다.";
             _groupBox.IsChecked = Setting("groupByProject") != "0";
             _groupBox.Click += (s, e) =>
             {
@@ -167,7 +167,7 @@ namespace PodmanMonitor.Ui
                 try
                 {
                     var text = string.Join("\n", Enumerable.Reverse(_alerts).Select(a => a.ToString()));
-                    LogWindow.Show(Window.GetWindow(this), "알림", text, "Docker 모니터 - 알림 기록");
+                    LogWindow.Show(Window.GetWindow(this), "알림", text, "Podman 모니터 - 알림 기록");
                 }
                 catch (Exception ex) { _status.Text = "알림 기록 열기 실패: " + ex.Message; }
             };
@@ -318,7 +318,7 @@ namespace PodmanMonitor.Ui
             _grid.RowStyle = row;
 
             Column("이름", nameof(ContainerRow.Name));
-            Column("프로젝트", nameof(ContainerRow.Project));
+            Column("프로젝트/pod", nameof(ContainerRow.Project));
             Column("상태", nameof(ContainerRow.State), StateStyle());
             Column("상세", nameof(ContainerRow.Status));
             Column("CPU", nameof(ContainerRow.Cpu), HotStyle(nameof(ContainerRow.CpuHot)));
@@ -427,14 +427,15 @@ namespace PodmanMonitor.Ui
             foreach (var (action, label) in ContainerActions)
                 menu.Items.Add(MenuItem($"{label} ({action}){suffix}", async () => await ContainerActionAsync(rows, action, label)));
 
-            // 고른 줄이 모두 같은 compose 프로젝트면 그 프로젝트 전체 조작을 보탠다
+            // 고른 줄이 모두 같은 묶음(compose 프로젝트 또는 pod)이면 그 묶음 전체 조작을 보탠다
             var project = rows[0].Project;
             if (string.IsNullOrEmpty(project) || rows.Any(r => r.Project != project)) return;
             var members = _rows.Where(r => r.Project == project).ToList();
             if (members.Count <= rows.Count) return; // 이미 전부 고름
+            var what = string.IsNullOrEmpty(rows[0].ComposeProject) ? $"'{rows[0].Pod}' pod" : $"'{project}' 프로젝트";
             menu.Items.Add(new Separator());
             foreach (var (action, label) in ContainerActions)
-                menu.Items.Add(MenuItem($"'{project}' 프로젝트 전체 {label} ({members.Count}개)", async () => await ContainerActionAsync(members, action, label)));
+                menu.Items.Add(MenuItem($"{what} 전체 {label} ({members.Count}개)", async () => await ContainerActionAsync(members, action, label)));
         }
 
         private static MenuItem MenuItem(string header, Action onClick)
@@ -589,7 +590,8 @@ namespace PodmanMonitor.Ui
                 var snap = await _collector.CollectAsync(ssh);
                 if (ssh != _ssh) return; // 그사이 다른 호스트로 바뀜
                 ShowSnapshot(snap);
-                _status.Text = $"{ssh.Alias} ({ssh.Target}) · 마지막 갱신 {snap.Time:HH:mm:ss} · 조회 {snap.ElapsedMs}ms · 연결 {ssh.ConnectCount}회";
+                _status.Text = $"{ssh.Alias} ({ssh.Target}) · 마지막 갱신 {snap.Time:HH:mm:ss} · 조회 {snap.ElapsedMs}ms · 연결 {ssh.ConnectCount}회" +
+                               string.Concat(snap.Warnings.Select(w => " · ⚠ " + w));
             }
             catch (Exception ex)
             {
@@ -632,16 +634,16 @@ namespace PodmanMonitor.Ui
         private void Apply(Snapshot snap)
         {
             _lastSnap = snap;
-            // 표: 같은 이름의 줄은 객체를 유지한 채 값만 갱신. 묶을 때는 프로젝트(compose 아닌 것은 맨 뒤) → 실행 중 → 이름 순
+            // 표: 같은 이름의 줄은 객체를 유지한 채 값만 갱신. 묶을 때는 묶음(프로젝트·pod, 둘 다 아닌 것은 맨 뒤) → 실행 중 → 이름 순
             var ordered = (Grouped
-                    ? snap.Containers.OrderBy(c => string.IsNullOrEmpty(c.Project)).ThenBy(c => c.Project, StringComparer.OrdinalIgnoreCase)
+                    ? snap.Containers.OrderBy(c => string.IsNullOrEmpty(c.Group)).ThenBy(c => c.Group, StringComparer.OrdinalIgnoreCase)
                     : snap.Containers.OrderBy(c => 0))
                 .ThenBy(c => c.State != "running").ThenBy(c => c.Name).ToList();
             _groups.Update(snap.Containers);
             for (int i = 0; i < ordered.Count; i++)
             {
                 var existing = _rows.FirstOrDefault(r => r.Name == ordered[i].Name);
-                if (existing != null && existing.Project != (ordered[i].Project ?? ""))
+                if (existing != null && existing.Project != ordered[i].Group)
                 {
                     _rows.Remove(existing); // 프로젝트가 바뀌면(다시 만든 컨테이너) 묶음을 새로 정하게 한다
                     existing = null;
@@ -672,6 +674,7 @@ namespace PodmanMonitor.Ui
             if (h.CpuPercent.HasValue) parts.Add($"호스트 CPU {h.CpuPercent:0.#}%");
             if (h.MemTotal > 0) parts.Add($"메모리 {h.MemPercent:0.#}% ({Format.Bytes(h.MemTotal - h.MemAvailable)}/{Format.Bytes(h.MemTotal)})");
             if (!string.IsNullOrEmpty(h.LoadAverage)) parts.Add($"load {h.LoadAverage} ({h.Cores}코어)");
+            else if (h.MemTotal > 0) parts.Add($"{h.Cores}코어"); // Windows 에는 load average 가 없다
             parts.Add($"컨테이너 실행 {snap.Containers.Count(c => c.State == "running")} / 전체 {snap.Containers.Count}");
             _summary.Text = string.Join(" · ", parts);
 
@@ -737,7 +740,7 @@ namespace PodmanMonitor.Ui
                 var nameOf = rows.GroupBy(x => x.Id).ToDictionary(g => g.Key, g => g.First().Name);
                 if (action != "start")
                 {
-                    if (MessageBox.Show(Window.GetWindow(this), ConfirmText(rows, steps, label), "Docker 모니터", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
+                    if (MessageBox.Show(Window.GetWindow(this), ConfirmText(rows, steps, label), "Podman 모니터", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
                         return;
                 }
                 _status.Text = $"{what} {label} 중...";
@@ -745,7 +748,7 @@ namespace PodmanMonitor.Ui
                 // 한 채널에서 차례로 — 조작당 최대 60초, 건강 대기는 최대 HealthWaitSeconds
                 int waits = steps.Count(s => s.Action == ComposeOrder.WaitHealthy);
                 var timeout = TimeSpan.FromSeconds(30 + 60 * (steps.Count - waits) + RemoteScript.HealthWaitSeconds * waits);
-                var r = await ssh.RunAsync(RemoteScript.ContainerSteps(steps), timeout);
+                var r = await ssh.RunAsync(os => RemoteScript.ContainerSteps(steps, os), timeout);
                 var results = RemoteScript.ParseStepResults(r.Output);
 
                 var failed = new System.Collections.Generic.List<string>();
@@ -755,11 +758,9 @@ namespace PodmanMonitor.Ui
                     if (i >= results.Count) { failed.Add($"{name}({StepLabel(steps[i].Action)} 응답 없음)"); break; }
                     var res = results[i].Result;
                     if (!RemoteScript.StepSucceeded(res))
-                        failed.Add(res == "timeout" ? $"{name}(healthy 대기 시간 초과)" : $"{name}({StepLabel(steps[i].Action)} HTTP {res})");
+                        failed.Add(res == "timeout" ? $"{name}(healthy 대기 시간 초과)" : $"{name}({StepLabel(steps[i].Action)} 실패, {res.Replace("exit", "종료 코드 ")})");
                 }
-                if (rows.Count == 1 && failed.Count == 0 && results.Count == 1 && results[0].Result == "304")
-                    _status.Text = $"{what} 이미 그 상태입니다";
-                else if (failed.Count == 0)
+                if (failed.Count == 0)
                     _status.Text = $"{what} {label} 완료";
                 else
                     _status.Text = $"{what} {label} 중 실패: " + string.Join(", ", failed) + (string.IsNullOrWhiteSpace(r.Error) ? "" : " — " + r.Error.Trim());
@@ -803,7 +804,7 @@ namespace PodmanMonitor.Ui
             {
                 if (!(_grid.SelectedItem is ContainerRow row) || _ssh == null) return;
                 _status.Text = $"{row.Name} 로그 조회 중...";
-                var r = await _ssh.RunAsync(RemoteScript.Logs(row.Id, 200), TimeSpan.FromSeconds(30));
+                var r = await _ssh.RunAsync(os => RemoteScript.Logs(row.Id, 200, os), TimeSpan.FromSeconds(30));
                 _status.Text = $"{row.Name} 로그 조회 완료";
                 LogWindow.Show(Window.GetWindow(this), row.Name, r.Output);
             }

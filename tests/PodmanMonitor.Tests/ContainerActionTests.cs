@@ -12,18 +12,40 @@ namespace PodmanMonitor.Tests
         public void ComposeLabels_Parsed()
         {
             var list = RemoteScript.ParseContainers(
-                "[{\"Id\":\"aaa\",\"Names\":[\"/penpot-backend-1\"],\"Labels\":{\"com.docker.compose.project\":\"penpot\"," +
+                "[{\"Id\":\"aaa\",\"Names\":[\"penpot-backend-1\"],\"Labels\":{\"com.docker.compose.project\":\"penpot\"," +
                 "\"com.docker.compose.service\":\"backend\",\"com.docker.compose.depends_on\":\"postgres:service_healthy:false,valkey:service_started:false\"}}," +
-                "{\"Id\":\"bbb\",\"Names\":[\"/solo\"],\"Labels\":{}}," +
-                "{\"Id\":\"ccc\",\"Names\":[\"/nolabels\"]}]");
+                "{\"Id\":\"bbb\",\"Names\":[\"solo\"],\"Labels\":{}}," +
+                "{\"Id\":\"ccc\",\"Names\":[\"nolabels\"],\"Labels\":null}]");
             Assert.Equal("penpot", list[0].Project);
             Assert.Equal("backend", list[0].Service);
+            Assert.Equal("penpot", list[0].Group);
             Assert.Equal(new[] { "postgres", "valkey" }, list[0].DependsOn.Select(d => d.Service));
             Assert.True(list[0].DependsOn[0].NeedsHealthy);
             Assert.False(list[0].DependsOn[1].NeedsHealthy);
             Assert.Equal("", list[1].Project);
             Assert.Equal("", list[2].Project);
+            Assert.Equal("", list[2].Group);
             Assert.Empty(list[2].DependsOn);
+        }
+
+        [Fact]
+        public void PodmanComposeLabels_AndPods()
+        {
+            var list = RemoteScript.ParseContainers(
+                // podman-compose 라벨만 있는 것(pod 에도 속함) → compose 프로젝트가 우선
+                "[{\"Id\":\"aaa\",\"Names\":[\"app_db_1\"],\"PodName\":\"pod_app\",\"IsInfra\":false," +
+                "\"Labels\":{\"io.podman.compose.project\":\"app\",\"io.podman.compose.service\":\"db\"}}," +
+                // pod 에만 속한 것 → pod 로 묶음
+                "{\"Id\":\"bbb\",\"Names\":[\"web-app\"],\"PodName\":\"web\",\"IsInfra\":false,\"Labels\":null}," +
+                // pod infra 는 목록에서 뺀다
+                "{\"Id\":\"ccc\",\"Names\":[\"5eb3bd2af5ba-infra\"],\"PodName\":\"web\",\"IsInfra\":true}]");
+            Assert.Equal(2, list.Count);
+            Assert.Equal("app", list[0].Project);
+            Assert.Equal("db", list[0].Service);
+            Assert.Equal("app", list[0].Group);
+            Assert.Equal("", list[1].Project);
+            Assert.Equal("web", list[1].Pod);
+            Assert.Equal("web (pod)", list[1].Group);
         }
 
         [Theory]
@@ -85,7 +107,8 @@ namespace PodmanMonitor.Tests
         {
             var s = RemoteScript.ContainerSteps(new[] { new ContainerStep("abc123", "stop"), new ContainerStep("def456", "wait-healthy") });
             Assert.Contains("for x in abc123:stop def456:wait-healthy; do", s);
-            Assert.Contains("\"Status\":\"healthy\"", s);
+            Assert.Contains("podman healthcheck run \"$id\"", s);
+            Assert.Contains("podman \"$a\" \"$id\"", s);
         }
 
         [Theory]
@@ -98,11 +121,13 @@ namespace PodmanMonitor.Tests
         [Fact]
         public void Results_ParsedInOrder()
         {
-            var r = RemoteScript.ParseStepResults("abc stop 204\r\nabc start 304\nddd wait-healthy timeout\n\n");
-            Assert.Equal(3, r.Count);
-            Assert.Equal(("abc", "start", "304"), r[1]);
+            var r = RemoteScript.ParseStepResults("abc stop ok\r\nabc start exit125\nddd wait-healthy timeout\nddd wait-healthy healthy\n\n");
+            Assert.Equal(4, r.Count);
+            Assert.Equal(("abc", "start", "exit125"), r[1]);
             Assert.True(RemoteScript.StepSucceeded(r[0].Result));
+            Assert.False(RemoteScript.StepSucceeded(r[1].Result));
             Assert.False(RemoteScript.StepSucceeded(r[2].Result));
+            Assert.True(RemoteScript.StepSucceeded(r[3].Result));
         }
     }
 }
