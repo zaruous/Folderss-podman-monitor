@@ -83,11 +83,12 @@ if($rl -eq 'true' -and $cg -eq 'v1'){$m+=' (rootless + cgroup v1 이라 컨테�
 ""@@OK@@ $env:COMPUTERNAME · Windows · $m""}else{""podman 을 실행하지 못했습니다: $(@($r.err|?{$_ -match 'error'})+$r.err|select -f 1)""}
 ";
 
-        /// <summary>Windows 에서 실행할 명령: PowerShell 스크립트를 UTF-16 base64 로 넘긴다(cmd·PowerShell 어느 로그인 셸에서도 같다).</summary>
+        /// <summary>Windows 에서 실행할 명령: PowerShell 스크립트를 UTF-16 base64 로 넘긴다(cmd·PowerShell 어느 로그인 셸에서도 같다).
+        /// \r 은 앞부분(PsPrelude)까지 모두 지운다 — core.autocrlf=true 로 받은 소스는 여러 줄 문자열에 CRLF 가 들어간다.</summary>
         public static string PowerShell(string script)
         {
             var command = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " +
-                Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(PsPrelude + script.Replace("\r", "")));
+                Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes((PsPrelude + script).Replace("\r", "")));
             // cmd 한 줄은 8191자까지
             if (command.Length > 8000) throw new ArgumentException("한 번에 보내기에 명령이 너무 깁니다. 컨테이너를 나눠서 조작하세요.");
             return command;
