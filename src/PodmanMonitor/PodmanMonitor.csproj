@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>disable</Nullable>
+    <!-- Windows가 아닌 곳(CI 등)에서도 컴파일만은 되게 한다. 실행은 Windows에서만 -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- 라이브러리 프로젝트도 NuGet DLL을 출력 폴더에 복사한다 — zip에 함께 넣기 위해 -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 계약 DLL은 Folderss 본체의 것을 쓰므로 zip에 넣지 않는다 (Private=false) -->
+    <ProjectReference Include="..\..\contract\Folderss.PluginContract\Folderss.PluginContract.csproj" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- SSH 연결 하나를 유지하며 명령마다 채널만 새로 연다 (ssh.exe 를 매번 띄우지 않음) -->
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PodmanMonitor.Tests" />
+  </ItemGroup>
+
+  <!--
+    빌드할 때마다 bin\<구성>\net8.0-windows\<AssemblyName>.zip 을 만든다.
+    Folderss는 .deps.json으로 플러그인 폴더의 DLL을 찾으므로 deps.json과 NuGet DLL(ReferenceCopyLocalPaths)을 함께 넣는다.
+  -->
+  <Target Name="PackPlugin" AfterTargets="Build">
+    <PropertyGroup>
+      <PluginStage>$(IntermediateOutputPath)plugin-stage\</PluginStage>
+    </PropertyGroup>
+    <ItemGroup>
+      <PluginDeps Include="@(ReferenceCopyLocalPaths)" Condition="'%(Extension)' == '.dll' And '%(Filename)' != 'Folderss.PluginContract'" />
+    </ItemGroup>
+    <RemoveDir Directories="$(PluginStage)" />
+    <Copy SourceFiles="plugin.json;$(TargetPath);$(ProjectDepsFilePath)" DestinationFolder="$(PluginStage)" />
+    <Copy SourceFiles="@(PluginDeps)" DestinationFiles="@(PluginDeps->'$(PluginStage)%(DestinationSubDirectory)%(Filename)%(Extension)')" />
+    <ZipDirectory SourceDirectory="$(PluginStage)" DestinationFile="$(OutDir)$(AssemblyName).zip" Overwrite="true" />
+    <Message Importance="high" Text="Folderss 플러그인: $(OutDir)$(AssemblyName).zip" />
+  </Target>
+
+</Project>
