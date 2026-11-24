@@ -11,7 +11,7 @@ using Xunit.Abstractions;
 namespace PodmanMonitor.UiTests
 {
     /// <summary>
-    /// Docker 모니터 화면 시험. Folderss처럼 zip을 불러 Initialize → CreateView를 팝업 창에 담고 확인한다.
+    /// Podman 모니터 화면 시험. Folderss처럼 zip을 불러 Initialize → CreateView를 팝업 창에 담고 확인한다.
     /// 실제 서버에 붙는 시험은 PODMAN_MONITOR_LIVE_HOST(예: ~/.ssh/config 별칭)가 있을 때만 돈다.
     /// </summary>
     public class PodmanMonitorHeadlessTests
@@ -78,7 +78,7 @@ namespace PodmanMonitor.UiTests
                     Assert.Empty(Ui.ById<ComboBox>(window, "HostCombo").Items);
                     var grid = Ui.ById<DataGrid>(window, "ContainerGrid");
                     Assert.Equal(11, grid.Columns.Count);
-                    Assert.Equal("프로젝트", grid.Columns[1].Header);
+                    Assert.Equal("프로젝트/pod", grid.Columns[1].Header);
                     Assert.Equal(DataGridSelectionMode.Extended, grid.SelectionMode); // 여러 개 골라 한 번에 조작
                     var chart = Ui.ById<FrameworkElement>(window, "HostCpuChart");
                     var gridTop = grid.TranslatePoint(new Point(0, 0), window).Y;

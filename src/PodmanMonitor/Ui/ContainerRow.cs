@@ -15,7 +15,11 @@ namespace PodmanMonitor.Ui
         public string State { get; private set; }
         public string Status { get; private set; }
         public string Ports { get; private set; }
+        /// <summary>표 묶음 이름(compose 프로젝트, 없으면 "pod이름 (pod)").</summary>
         public string Project { get; private set; }
+        /// <summary>compose 프로젝트(의존 순서 계산용). compose 가 아니면 빈 문자열.</summary>
+        public string ComposeProject { get; private set; }
+        public string Pod { get; private set; }
         public string Service { get; private set; }
         public System.Collections.Generic.List<ComposeDependency> DependsOn { get; private set; }
         public string Cpu { get; private set; }
@@ -29,7 +33,7 @@ namespace PodmanMonitor.Ui
         public bool CpuHot => CpuValue >= 80;
         public bool MemHot => MemValue >= 80;
 
-        public ComposeTarget ToTarget() => new ComposeTarget { Id = Id, Project = Project, Service = Service, DependsOn = DependsOn };
+        public ComposeTarget ToTarget() => new ComposeTarget { Id = Id, Project = ComposeProject, Service = Service, DependsOn = DependsOn };
 
         public void Update(ContainerInfo c)
         {
@@ -39,7 +43,9 @@ namespace PodmanMonitor.Ui
             State = c.State;
             Status = c.Status;
             Ports = c.Ports;
-            Project = c.Project ?? "";
+            Project = c.Group;
+            ComposeProject = c.Project ?? "";
+            Pod = c.Pod ?? "";
             Service = c.Service ?? "";
             DependsOn = c.DependsOn ?? new System.Collections.Generic.List<ComposeDependency>();
             Unhealthy = c.Status?.Contains("unhealthy") == true;

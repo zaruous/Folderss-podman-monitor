@@ -12,10 +12,10 @@ using PodmanMonitor.Monitoring;
 
 namespace PodmanMonitor.Ui
 {
-    /// <summary>표에서 compose 프로젝트 묶음 한 개의 머리줄(이름·실행 수·CPU·메모리 합계)과 접힘 상태.</summary>
+    /// <summary>표에서 compose 프로젝트·pod 묶음 한 개의 머리줄(이름·실행 수·CPU·메모리 합계)과 접힘 상태.</summary>
     public sealed class ProjectGroup : INotifyPropertyChanged
     {
-        public const string NoProject = "(compose 아님)";
+        public const string NoProject = "(compose·pod 아님)";
         public event PropertyChangedEventHandler PropertyChanged;
         private bool _expanded = true;
 
@@ -76,7 +76,7 @@ namespace PodmanMonitor.Ui
         /// <summary>이번 표본으로 머리줄 합계를 고친다.</summary>
         public void Update(IEnumerable<ContainerInfo> containers)
         {
-            foreach (var g in containers.GroupBy(c => c.Project ?? ""))
+            foreach (var g in containers.GroupBy(c => c.Group))
                 Get(g.Key).Update(g.ToList());
         }
 

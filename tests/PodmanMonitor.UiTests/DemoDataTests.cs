@@ -54,11 +54,13 @@ namespace PodmanMonitor.UiTests
                     Ui.ById<TextBlock>(window, "StatusText").Text = "demo (deploy@demo-host:22) · 마지막 갱신 " + DateTime.Now.ToString("HH:mm:ss") + " · 조회 184ms · 연결 1회";
                     var grid = Ui.ById<DataGrid>(window, "ContainerGrid");
                     Assert.Equal(11, grid.Items.Count);
-                    // 묶음 머리줄: 프로젝트 3개 + compose 아님
+                    // 묶음 머리줄: 프로젝트 3개 + pod 1개 + 둘 다 아님 (pod infra 컨테이너는 줄에 없다)
                     var headers = Ui.Texts(grid).Where(t => t.Contains(" 실행")).ToList();
                     _out.WriteLine("묶음: " + string.Join(" | ", headers));
+                    Assert.Equal(5, headers.Count);
                     Assert.Contains(headers, t => t.StartsWith("6/6 실행"));
-                    Assert.Contains("(compose 아님)", Ui.Texts(grid));
+                    Assert.Contains("storage (pod)", Ui.Texts(grid));
+                    Assert.Contains("(compose·pod 아님)", Ui.Texts(grid));
                     Assert.Equal(Visibility.Collapsed, Ui.ById<Border>(window, "AlertBar").Visibility);
                     SelectByName(grid, "penpot-backend-1");
                 });
@@ -137,7 +139,7 @@ namespace PodmanMonitor.UiTests
                 Shot(ui, window, plugin, "demo-alert");
 
                 ui.Run(() => Ui.Click(Ui.ById<Button>(window, "AlertListButton")));
-                var log = await ui.WaitFor(() => Ui.Windows().FirstOrDefault(w => w.Title == "Docker 모니터 - 알림 기록"), Wait, "알림 기록 창");
+                var log = await ui.WaitFor(() => Ui.Windows().FirstOrDefault(w => w.Title == "Podman 모니터 - 알림 기록"), Wait, "알림 기록 창");
                 ui.Run(() => { log.Width = 720; log.Height = 220; });
                 await Task.Delay(300);
                 _out.WriteLine("캡처: " + ui.Run(() => Ui.Snap(log, plugin.ShotFolder, "demo-alert-log")));
@@ -206,12 +208,13 @@ namespace PodmanMonitor.UiTests
             encoder.Save(stream);
         }
 
-        /// <summary>가상의 서버: compose 프로젝트 penpot(6)·gitlab(1)·monitoring(2) + compose 아닌 것 2개.</summary>
+        /// <summary>가상의 서버: compose 프로젝트 penpot(6)·gitlab(1)·monitoring(2) + pod storage(minio, infra 포함) + 둘 다 아닌 것 1개. podman 출력 형식.</summary>
         private sealed class DemoServer
         {
             private sealed class Demo
             {
-                public string Id, Name, Image, Project, Service, DependsOn, Ports, Health;
+                public string Id, Name, Image, Project, Service, DependsOn, Ports, Health, Pod = "";
+                public bool Infra;
                 public bool Running = true;
                 public double Cpu, MemMiB;
             }
@@ -227,7 +230,8 @@ namespace PodmanMonitor.UiTests
                 D("2b3c4d5e6f01", "gitlab", "gitlab/gitlab-ce:17.5.1-ce.0", "gitlab", "gitlab", "", 8929, 80, "healthy", 22.0, 5900),
                 D("3c4d5e6f7a01", "prometheus", "prom/prometheus:v2.55.0", "monitoring", "prometheus", "", 9090, 9090, null, 2.1, 380),
                 D("3c4d5e6f7a02", "grafana", "grafana/grafana:11.3.0", "monitoring", "grafana", "prometheus:service_started:false", 3000, 3000, "healthy", 0.8, 120),
-                D("4d5e6f7a8b01", "minio", "quay.io/minio/minio:latest", "", "", "", 9000, 9000, null, 0.2, 160),
+                D("4d5e6f7a8b01", "minio", "quay.io/minio/minio:latest", "", "", "", 9000, 9000, null, 0.2, 160, pod: "storage"),
+                D("4d5e6f7a8b03", "8f1e2d3c4b5a-infra", "", "", "", "", 9000, 9000, null, 0, 1, pod: "storage", infra: true),
                 D("4d5e6f7a8b02", "old-backup", "busybox:1.36", "", "", "", 0, 0, null, 0, 0),
             };
 
@@ -238,14 +242,17 @@ namespace PodmanMonitor.UiTests
                 _all.Single(c => c.Name == "old-backup").Running = false;
             }
 
-            private static Demo D(string id, string name, string image, string project, string service, string deps, int pub, int priv, string health, double cpu, double mem) =>
+            private static Demo D(string id, string name, string image, string project, string service, string deps, int pub, int priv, string health, double cpu, double mem,
+                                  string pod = "", bool infra = false) =>
                 new Demo
                 {
-                    Id = id, Name = name, Image = image, Project = project, Service = service, DependsOn = deps, Health = health, Cpu = cpu, MemMiB = mem,
-                    Ports = pub > 0 ? "[{\"IP\":\"0.0.0.0\",\"PrivatePort\":" + priv + ",\"PublicPort\":" + pub + ",\"Type\":\"tcp\"}]" : "[]",
+                    Id = id, Name = name, Image = image, Project = project, Service = service, DependsOn = deps, Health = health, Cpu = cpu, MemMiB = mem, Pod = pod, Infra = infra,
+                    Ports = pub > 0 ? "[{\"host_ip\":\"\",\"container_port\":" + priv + ",\"host_port\":" + pub + ",\"range\":1,\"protocol\":\"tcp\"}]" : "null",
                 };
 
-            const long SysPerTick = 4L * 3 * 1_000_000_000; // 4코어 × 3초(ns)
+            const long CpuPerTick = 4L * 3 * 1_000_000_000; // 4코어 × 3초(ns) — 호스트 전체가 쓸 수 있는 CPU 시간
+            const long TickNano = 3L * 1_000_000_000;
+            const long T0 = 1_795_482_000_000_000_000;
 
             public string Output(int k)
             {
@@ -253,15 +260,16 @@ namespace PodmanMonitor.UiTests
                 sb.Append("@@PS@@\n[");
                 sb.Append(string.Join(",", _all.Select(Json)));
                 sb.Append("]\n");
+                // podman stats --format '{{json .}}': 실행 중인 것(infra 포함)마다 한 줄
+                sb.Append("@@STATS@@\n");
                 foreach (var c in _all.Where(Running))
                 {
-                    long cpuTotal = (long)(Enumerable.Range(0, k + 1).Sum(i => c.Cpu / 100 * (1 + 0.35 * Math.Sin(i * 0.5 + c.Cpu))) * SysPerTick);
+                    long cpuNano = (long)(Enumerable.Range(0, k + 1).Sum(i => c.Cpu / 100 * (1 + 0.35 * Math.Sin(i * 0.5 + c.Cpu))) * CpuPerTick);
                     long mem = (long)(c.MemMiB * (1 + 0.02 * Math.Sin(k * 0.3)) * 1048576);
-                    sb.Append("@@STATS@@\n{\"id\":\"" + c.Id + "\",\"cpu_stats\":{\"cpu_usage\":{\"total_usage\":" + cpuTotal + "},\"system_cpu_usage\":" + SysPerTick * (k + 1) +
-                              ",\"online_cpus\":4},\"memory_stats\":{\"usage\":" + mem + ",\"limit\":16777216000,\"stats\":{\"inactive_file\":0}}," +
-                              "\"networks\":{\"eth0\":{\"rx_bytes\":" + (long)(c.MemMiB * 90000 * (k + 10)) + ",\"tx_bytes\":" + (long)(c.MemMiB * 40000 * (k + 10)) + "}}," +
-                              "\"blkio_stats\":{\"io_service_bytes_recursive\":[{\"op\":\"read\",\"value\":" + (long)(c.MemMiB * 300000) + "},{\"op\":\"write\",\"value\":" + (long)(c.MemMiB * 120000 * (k + 1)) + "}]}," +
-                              "\"pids_stats\":{\"current\":12}}\n");
+                    sb.Append("{\"ContainerID\":\"" + c.Id + "\",\"Name\":\"" + c.Name + "\",\"CPUNano\":" + cpuNano + ",\"SystemNano\":" + (T0 + TickNano * k) +
+                              ",\"MemUsage\":" + mem + ",\"MemLimit\":16777216000," +
+                              "\"NetInput\":" + (long)(c.MemMiB * 90000 * (k + 10)) + ",\"NetOutput\":" + (long)(c.MemMiB * 40000 * (k + 10)) + "," +
+                              "\"BlockInput\":" + (long)(c.MemMiB * 300000) + ",\"BlockOutput\":" + (long)(c.MemMiB * 120000 * (k + 1)) + ",\"PIDs\":12}\n");
                 }
                 // 호스트: 4코어, 사용률 30% 안팎, iowait 1~2%
                 long total = 1200L * (k + 1);
@@ -289,11 +297,12 @@ namespace PodmanMonitor.UiTests
                 if (Incident && c.Name == "grafana") health = "unhealthy";
                 var status = running ? "Up 7 days" + (health != null ? $" ({health})" : "")
                            : c.Name == "old-backup" ? "Exited (0) 3 weeks ago" : "Exited (137) 2 seconds ago";
-                var labels = string.IsNullOrEmpty(c.Project) ? "{}"
+                var labels = string.IsNullOrEmpty(c.Project) ? "null"
                     : "{\"com.docker.compose.project\":\"" + c.Project + "\",\"com.docker.compose.service\":\"" + c.Service + "\"" +
                       (c.DependsOn.Length > 0 ? ",\"com.docker.compose.depends_on\":\"" + c.DependsOn + "\"" : "") + "}";
-                return "{\"Id\":\"" + c.Id + "\",\"Names\":[\"/" + c.Name + "\"],\"Image\":\"" + c.Image + "\",\"State\":\"" + (running ? "running" : "exited") +
-                       "\",\"Status\":\"" + status + "\",\"Ports\":" + c.Ports + ",\"Labels\":" + labels + "}";
+                return "{\"Id\":\"" + c.Id + "\",\"Names\":[\"" + c.Name + "\"],\"Image\":\"" + c.Image + "\",\"State\":\"" + (running ? "running" : "exited") +
+                       "\",\"Status\":\"" + status + "\",\"Ports\":" + c.Ports + ",\"Labels\":" + labels +
+                       ",\"PodName\":\"" + c.Pod + "\",\"IsInfra\":" + (c.Infra ? "true" : "false") + "}";
             }
         }
     }

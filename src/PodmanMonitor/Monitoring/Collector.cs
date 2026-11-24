@@ -17,7 +17,7 @@ namespace PodmanMonitor.Monitoring
         public const int MaxSamples = 3600;
 
         private long[] _prevHostCpu;
-        private readonly Dictionary<string, (long cpu, long sys)> _prevContainerCpu = new Dictionary<string, (long, long)>();
+        private readonly Dictionary<string, (long cpu, long time)> _prevContainerCpu = new Dictionary<string, (long, long)>();
 
         public List<Sample> HostCpu { get; } = new List<Sample>();
         public List<Sample> HostIoWait { get; } = new List<Sample>();
@@ -45,6 +45,7 @@ namespace PodmanMonitor.Monitoring
                 throw new InvalidOperationException(string.Join(" / ", sec.Errors));
 
             var snap = new Snapshot { Time = now };
+            snap.Warnings.AddRange(sec.Warnings);
 
             // 호스트
             var host = RemoteScript.ParseHost(sec.HostLines);
@@ -75,15 +76,15 @@ namespace PodmanMonitor.Monitoring
                     c.Pids = s.Pids;
                     if (_prevContainerCpu.TryGetValue(c.Id, out var prev))
                     {
-                        long dCpu = s.CpuTotal - prev.cpu, dSys = s.SystemCpu - prev.sys;
-                        if (dSys > 0 && dCpu >= 0)
+                        // 컨테이너 CPU 시간(모든 코어 합) 증가분 / 지난 실제 시간 = 사용 코어 수. 코어 수로 나누면 호스트 전체 대비 %
+                        long dCpu = s.CpuNano - prev.cpu, dTime = s.SampleNano - prev.time;
+                        if (dTime > 0 && dCpu >= 0)
                         {
-                            // system_cpu_usage 는 모든 코어의 합 — 비율이 곧 호스트 전체 대비 사용률
-                            c.CpuPercent = 100.0 * dCpu / dSys;
-                            c.CpuCores = (double)dCpu / dSys * Math.Max(1, s.OnlineCpus);
+                            c.CpuCores = (double)dCpu / dTime;
+                            c.CpuPercent = 100.0 * c.CpuCores / Math.Max(1, host.Cores);
                         }
                     }
-                    _prevContainerCpu[c.Id] = (s.CpuTotal, s.SystemCpu);
+                    _prevContainerCpu[c.Id] = (s.CpuNano, s.SampleNano);
                 }
                 snap.Containers.Add(c);
             }
