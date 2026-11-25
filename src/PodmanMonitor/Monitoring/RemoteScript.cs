@@ -14,7 +14,10 @@ namespace PodmanMonitor.Monitoring
     /// </summary>
     public static class RemoteScript
     {
-        const string PsMark = "@@PS@@", StatsMark = "@@STATS@@", HostMark = "@@HOST@@", DiskMark = "@@DISK@@", ErrMark = "@@ERR@@", WarnMark = "@@WARN@@";
+        const string PsMark = "@@PS@@", StatsMark = "@@STATS@@", HostMark = "@@HOST@@", DiskMark = "@@DISK@@", GpuMark = "@@GPU@@", ErrMark = "@@ERR@@", WarnMark = "@@WARN@@";
+
+        /// <summary>nvidia-smi 질의: GPU 마다 "index, name, 사용률%, 사용 MiB, 전체 MiB".</summary>
+        const string NvidiaQuery = "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits";
 
         public static string Collect { get; } = string.Join("\n", new[]
         {
@@ -29,6 +32,11 @@ namespace PodmanMonitor.Monitoring
             "else echo \"" + WarnMark + " 컨테이너 통계를 읽지 못했습니다: $(grep -m1 -i error \"$e\" || head -1 \"$e\")\"; fi",
             "echo '" + HostMark + "'; head -1 /proc/stat; grep -E '^(MemTotal|MemAvailable):' /proc/meminfo; cat /proc/loadavg; nproc",
             "echo '" + DiskMark + "'; LC_ALL=C df -P -B1 -x tmpfs -x devtmpfs -x squashfs -x overlay -x efivarfs",
+            // NVIDIA GPU(없으면 구획 자체를 내지 않는다). 드라이버가 망가지면 nvidia-smi 가 멈출 수 있어 5초로 자른다(timeout 이 있으면)
+            "if command -v nvidia-smi >/dev/null 2>&1; then t=; command -v timeout >/dev/null 2>&1 && t='timeout 5'",
+            "  if g=$($t " + NvidiaQuery + " 2>&1); then echo '" + GpuMark + "'; printf '%s\\n' \"$g\"",
+            "  else echo \"" + WarnMark + " GPU 정보를 읽지 못했습니다: $(printf '%s\\n' \"${g:-응답 없음}\" | head -1)\"; fi",
+            "fi",
         });
 
         /// <summary>연결 시험: 성공하면 "@@OK@@ 호스트이름 · Podman 버전 · rootless/rootful · cgroup 버전".</summary>
@@ -71,6 +79,8 @@ $m=Get-CimInstance Win32_OperatingSystem
 [Environment]::ProcessorCount
 '" + DiskMark + @"'
 Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3'|?{$_.Size}|%{$u=$_.Size-$_.FreeSpace;""$($_.DeviceID) $($_.Size) $u $($_.FreeSpace) $([int](100*$u/$_.Size))% $($_.DeviceID)\""}
+if(Get-Command nvidia-smi -EA 0){$o=@(& " + NvidiaQuery + @" 2>&1|%{""$_""})
+if($LASTEXITCODE -eq 0){'" + GpuMark + @"';$o}else{""" + WarnMark + @" GPU 정보를 읽지 못했습니다: $($o|select -f 1)""}}
 ";
         // /proc/stat 자리: user nice system idle iowait irq softirq steal — 성능 카운터의 사용자·커널·유휴 시간(100ns 누적)을 넣는다.
         // load average 는 Windows 에 없어 내지 않는다.
@@ -185,6 +195,7 @@ else{$o=Invoke-Podman $a $id;if($o.ok){$r='ok'}else{$r=""exit$($o.code)"";[Conso
             public List<string> StatsJson = new List<string>();
             public List<string> HostLines = new List<string>();
             public List<string> DiskLines = new List<string>();
+            public List<string> GpuLines = new List<string>();
             public List<string> Errors = new List<string>();
             public List<string> Warnings = new List<string>();
         }
@@ -204,6 +215,7 @@ else{$o=Invoke-Podman $a $id;if($o.ok){$r='ok'}else{$r=""exit$($o.code)"";[Conso
                     case StatsMark: s.StatsJson.AddRange(lines); break; // 컨테이너마다 한 줄
                     case HostMark: s.HostLines.AddRange(lines); break;
                     case DiskMark: s.DiskLines.AddRange(lines); break;
+                    case GpuMark: s.GpuLines.AddRange(lines); break;
                 }
                 buf.Clear();
             }
@@ -212,7 +224,7 @@ else{$o=Invoke-Podman $a $id;if($o.ok){$r='ok'}else{$r=""exit$($o.code)"";[Conso
             {
                 if (raw.StartsWith(ErrMark)) { s.Errors.Add(raw.Substring(ErrMark.Length).Trim()); continue; }
                 if (raw.StartsWith(WarnMark)) { s.Warnings.Add(raw.Substring(WarnMark.Length).Trim()); continue; }
-                if (raw == PsMark || raw == StatsMark || raw == HostMark || raw == DiskMark)
+                if (raw == PsMark || raw == StatsMark || raw == HostMark || raw == DiskMark || raw == GpuMark)
                 {
                     Flush();
                     current = raw;
@@ -372,6 +384,30 @@ else{$o=Invoke-Podman $a $id;if($o.ok){$r='ok'}else{$r=""exit$($o.code)"";[Conso
                     Mount = string.Join(" ", f.Skip(5)),
                 })
                 .ToList();
+
+        /// <summary>nvidia-smi csv(noheader, nounits): "index, name, 사용률, 사용 MiB, 전체 MiB". 이름에 쉼표가 있을 수 있어 앞 1칸·뒤 3칸으로 자른다.
+        /// 값을 못 주는 칸은 [N/A]. index 가 숫자가 아닌 줄(오류 문구)은 버린다.</summary>
+        public static List<GpuInfo> ParseGpus(IEnumerable<string> lines)
+        {
+            var list = new List<GpuInfo>();
+            foreach (var line in lines)
+            {
+                var raw = line.Split(',');
+                var f = raw.Select(x => x.Trim()).ToArray();
+                if (f.Length < 5 || !int.TryParse(f[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var index)) continue;
+                double? Num(string x) => double.TryParse(x, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : (double?)null;
+                long MiB(string x) => (long)((Num(x) ?? 0) * 1048576);
+                list.Add(new GpuInfo
+                {
+                    Index = index,
+                    Name = string.Join(",", raw.Skip(1).Take(raw.Length - 4)).Trim(),
+                    Utilization = Num(f[f.Length - 3]),
+                    MemUsed = MiB(f[f.Length - 2]),
+                    MemTotal = MiB(f[f.Length - 1]),
+                });
+            }
+            return list;
+        }
 
         static string FirstNonEmpty(string a, string b) => string.IsNullOrEmpty(a) ? b : a;
 

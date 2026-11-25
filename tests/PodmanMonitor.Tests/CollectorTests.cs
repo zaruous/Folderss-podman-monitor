@@ -112,6 +112,76 @@ namespace PodmanMonitor.Tests
             Assert.Equal(4, snap.Host.Cores);
         }
 
+        // nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits
+        const string GpuSection = "@@GPU@@\n0, NVIDIA GeForce RTX 3090, 35, 6144, 24576\n1, NVIDIA A100-SXM4-40GB, 0, 0, 40960\n";
+
+        [Fact]
+        public void Build_ParsesGpusAndKeepsHistory()
+        {
+            var c = new Collector();
+            var t0 = DateTime.Now;
+            var snap = c.Build(Output(Stats(1, T0), "cpu  100 0 100 800 0 0 0 0 0 0") + "\n" + GpuSection, t0);
+
+            Assert.Equal(2, snap.Gpus.Count);
+            var g = snap.Gpus[0];
+            Assert.Equal(0, g.Index);
+            Assert.Equal("NVIDIA GeForce RTX 3090", g.Name);
+            Assert.Equal(35, g.Utilization.Value, 6);
+            Assert.Equal(6144L * 1048576, g.MemUsed);
+            Assert.Equal(24576L * 1048576, g.MemTotal);
+            Assert.Equal(25, g.MemPercent.Value, 6);
+            Assert.Equal(2, snap.Disks.Count);                     // GPU 줄이 디스크로 섞이지 않는다
+
+            c.Build(Output(Stats(1, T0 + 3_000_000_000), "cpu  130 0 110 850 10 0 0 0 0 0") + "\n" + GpuSection, t0.AddSeconds(3));
+            Assert.Equal(new[] { 0, 1 }, c.Gpu.Keys);
+            Assert.Equal(2, c.Gpu[0].Util.Count);
+            Assert.Equal(2, c.Gpu[1].Mem.Count);
+            Assert.Equal(0, c.Gpu[1].Mem[1].Value, 6);
+        }
+
+        [Fact]
+        public void Build_NoGpu_EmptyListNoHistory()
+        {
+            var c = new Collector();
+            var snap = c.Build(Output(Stats(1, T0), "cpu  100 0 100 800 0 0 0 0 0 0"), DateTime.Now);
+            Assert.Empty(snap.Gpus);
+            Assert.Empty(c.Gpu);
+        }
+
+        [Fact]
+        public void ParseGpus_NotAvailableValuesAndCommaInName()
+        {
+            // 사용률·메모리를 못 주는 GPU 는 [N/A]. 이름에 쉼표가 있어도 앞(index)·뒤 3칸으로 자른다. 오류 문구 줄은 버린다
+            var gpus = RemoteScript.ParseGpus(new[]
+            {
+                "0, Tesla K80, rev 2, [N/A], 100, 11441",
+                "1, NVIDIA GH200 480GB, 12, [N/A], [N/A]",
+                "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver.",
+            });
+            Assert.Equal(2, gpus.Count);
+            Assert.Equal("Tesla K80, rev 2", gpus[0].Name);
+            Assert.Null(gpus[0].Utilization);
+            Assert.Equal(100L * 1048576, gpus[0].MemUsed);
+            Assert.Equal(12, gpus[1].Utilization.Value, 6);
+            Assert.Null(gpus[1].MemPercent);
+        }
+
+        [Fact]
+        public void Build_GpuQueryFailed_Warning()
+        {
+            var snap = new Collector().Build(Output(Stats(1, T0), "cpu  100 0 100 800 0 0 0 0 0 0") +
+                "\n@@WARN@@ GPU 정보를 읽지 못했습니다: NVIDIA-SMI has failed\n", DateTime.Now);
+            Assert.Empty(snap.Gpus);
+            Assert.Contains("GPU", Assert.Single(snap.Warnings));
+        }
+
+        [Fact]
+        public void CollectScript_QueriesNvidiaSmiWithTimeout()
+        {
+            Assert.Contains("nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits", RemoteScript.Collect);
+            Assert.Contains("timeout 5", RemoteScript.Collect);
+        }
+
         [Fact]
         public void ParseStats_Podman5NetworkMap()
         {
