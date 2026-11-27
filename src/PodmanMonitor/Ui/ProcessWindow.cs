@@ -68,6 +68,8 @@ namespace PodmanMonitor.Ui
         private readonly TextBlock _summary = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
         private readonly Button _retake = new Button { Content = "다시 찍기", Padding = new Thickness(10, 2, 10, 2) };
         private readonly Button _save = new Button { Content = "저장…", Padding = new Thickness(10, 2, 10, 2), Margin = new Thickness(6, 0, 0, 0), IsEnabled = false };
+        private readonly ProcessBoard _board = new ProcessBoard();
+        private readonly CheckBox _showBoard = new CheckBox { Content = "보드", IsChecked = true, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0, 0, 0) };
         private List<ProcessRow> _rows = new List<ProcessRow>();
         private ProcessSnapshot _snap;
 
@@ -98,6 +100,10 @@ namespace PodmanMonitor.Ui
             left.Children.Add(_save);
             left.Children.Add(new TextBlock { Text = "거르기", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0, 6, 0) });
             left.Children.Add(_filter);
+            left.Children.Add(_showBoard);
+            Id(_showBoard, "ProcessBoardBox");
+            _showBoard.Click += (s, e) => _board.Visibility = _showBoard.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+            _board.FilterRequested += f => _filter.Text = f;
             DockPanel.SetDock(left, Dock.Left);
             bar.Children.Add(left);
             _summary.TextTrimming = TextTrimming.CharacterEllipsis;
@@ -107,6 +113,9 @@ namespace PodmanMonitor.Ui
             var root = new DockPanel();
             DockPanel.SetDock(bar, Dock.Top);
             root.Children.Add(bar);
+            DockPanel.SetDock(_board, Dock.Top);
+            _board.Visibility = Visibility.Collapsed; // 첫 스냅샷이 들어오면 보인다
+            root.Children.Add(_board);
             root.Children.Add(_grid);
             Content = root;
             Loaded += async (s, e) => await TakeAsync();
@@ -163,9 +172,10 @@ namespace PodmanMonitor.Ui
             Column("컨테이너", nameof(ProcessRow.Container));
             Column("명령", nameof(ProcessRow.Command), mono: true);
 
-            // 숫자 열은 처음 누를 때 큰 값부터
+            // 숫자 열은 처음 누를 때 큰 값부터. 정렬 표시는 머리 글자 뒤 ▲▼(기본 화살표는 어두운 테마에서 보이지 않는다)
             _grid.Sorting += (s, e) =>
             {
+                Dispatcher.BeginInvoke(new Action(UpdateSortGlyphs), System.Windows.Threading.DispatcherPriority.Background);
                 if (e.Column.SortDirection == null && Equals(e.Column.GetValue(DescendingFirstProperty), true))
                 {
                     e.Handled = true;
@@ -176,6 +186,20 @@ namespace PodmanMonitor.Ui
                     e.Column.SortDirection = ListSortDirection.Descending;
                 }
             };
+        }
+
+        static readonly DependencyProperty BaseHeaderProperty =
+            DependencyProperty.RegisterAttached("BaseHeader", typeof(string), typeof(ProcessWindow), new PropertyMetadata(null));
+
+        /// <summary>정렬된 열 머리에 ▼(큰 값부터)·▲(작은 값부터)를 붙인다.</summary>
+        internal void UpdateSortGlyphs()
+        {
+            foreach (var c in _grid.Columns)
+            {
+                var name = (string)c.GetValue(BaseHeaderProperty);
+                c.Header = c.SortDirection == ListSortDirection.Descending ? name + " ▼"
+                         : c.SortDirection == ListSortDirection.Ascending ? name + " ▲" : name;
+            }
         }
 
         static readonly DependencyProperty DescendingFirstProperty =
@@ -190,6 +214,7 @@ namespace PodmanMonitor.Ui
             if (mono) style.Setters.Add(new Setter(TextBlock.FontFamilyProperty, new FontFamily("Consolas")));
             col.ElementStyle = style;
             col.SetValue(DescendingFirstProperty, descending);
+            col.SetValue(BaseHeaderProperty, header);
             _grid.Columns.Add(col);
         }
 
@@ -250,6 +275,9 @@ namespace PodmanMonitor.Ui
             foreach (var s in sorts) view.SortDescriptions.Add(s);
             foreach (var c in _grid.Columns)
                 c.SortDirection = sorts.Where(s => s.PropertyName == c.SortMemberPath).Select(s => (ListSortDirection?)s.Direction).FirstOrDefault();
+            UpdateSortGlyphs();
+            _board.Update(snap, _rows);
+            if (_showBoard.IsChecked == true) _board.Visibility = Visibility.Visible;
 
             int inContainer = _rows.Count(r => r.Container.Length > 0);
             var cpuSum = snap.Processes.Sum(p => p.CpuPercent ?? 0);

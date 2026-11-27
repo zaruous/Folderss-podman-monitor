@@ -50,6 +50,33 @@ namespace PodmanMonitor.UiTests
             return sb.ToString();
         }
 
+        static int Pid(object row) => (int)row.GetType().GetProperty("Pid").GetValue(row);
+
+        static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+        {
+            for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                var c = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+                yield return c;
+                foreach (var d in Descendants(c)) yield return d;
+            }
+        }
+
+        static IEnumerable<string> Texts(DependencyObject root) =>
+            Descendants(root).OfType<TextBlock>()
+                .Select(t => new System.Windows.Documents.TextRange(t.ContentStart, t.ContentEnd).Text) // Inlines 로 넣은 글자까지
+                .Where(t => !string.IsNullOrEmpty(t));
+
+        /// <summary>열 머리를 누른 것과 같다(DataGridColumnHeader.OnClick → 정렬). 마우스는 쓰지 않는다.</summary>
+        static void ClickHeader(DataGrid grid, string name)
+        {
+            grid.UpdateLayout();
+            var header = Descendants(grid).OfType<System.Windows.Controls.Primitives.DataGridColumnHeader>()
+                .First(h => h.Column != null && ((string)h.Column.Header).TrimEnd('▲', '▼', ' ') == name);
+            typeof(System.Windows.Controls.Primitives.ButtonBase).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(header, null);
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle); // ▲▼ 갱신(Background) 기다림
+        }
+
         [UiFact]
         public async Task ProcessSnapshot_ShowsSortsFiltersAndCaptures()
         {
@@ -92,11 +119,45 @@ namespace PodmanMonitor.UiTests
                     Assert.Contains("찍음", Ui.ById<TextBlock>(window, "ProcessSummary").Text);
                 });
                 await Task.Delay(300);
+                ui.Run(() =>
+                {
+                    var grid = Ui.ById<DataGrid>(window, "ProcessGrid");
+                    Assert.Equal("CPU ▼", grid.Columns[2].Header);                      // 처음은 CPU 큰 값부터, 표시가 보인다
+                    Assert.True(Ui.ById<FrameworkElement>(window, "BoardContainers").IsVisible, "보드");
+                    var board = string.Join(" | ", Texts(Ui.ById<FrameworkElement>(window, "BoardContainers")));
+                    _out.WriteLine("컨테이너별: " + board);
+                    Assert.StartsWith("gitlab (2)", board);                              // CPU 합계가 가장 큰 컨테이너
+                    Assert.Contains("(호스트) (", board);
+                    Assert.Contains("gitlab", string.Join(" ", Texts(Ui.ById<FrameworkElement>(window, "BoardSummary"))));
+                });
                 _out.WriteLine("캡처: " + ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "process-snapshot")));
 
-                ui.Run(() => Ui.ById<TextBox>(window, "ProcessFilter").Text = "postgres");
-                await Task.Delay(200);
-                ui.Run(() => Assert.Equal(2, Ui.ById<DataGrid>(window, "ProcessGrid").Items.Count));
+                // 열 머리를 실제로 눌러 정렬(머리의 OnClick) — PID 는 작은 값부터, 다시 누르면 큰 값부터
+                ui.Run(() =>
+                {
+                    var grid = Ui.ById<DataGrid>(window, "ProcessGrid");
+                    ClickHeader(grid, "PID");
+                    Assert.Equal("PID ▲", grid.Columns[0].Header);
+                    Assert.Equal("CPU", grid.Columns[2].Header);
+                    Assert.Equal(1, Pid(grid.Items[0]));
+                    ClickHeader(grid, "PID");
+                    Assert.Equal("PID ▼", grid.Columns[0].Header);
+                    Assert.Equal(4200, Pid(grid.Items[0]));
+                    ClickHeader(grid, "메모리");                                         // 숫자 열은 처음 누를 때 큰 값부터
+                    Assert.Equal("메모리 ▼", grid.Columns[4].Header);
+                    Assert.Equal(3001, Pid(grid.Items[0]));
+                });
+
+                // 보드의 컨테이너 줄을 누르면 표가 그 컨테이너로 걸러진다
+                ui.Run(() =>
+                {
+                    var row = Descendants(Ui.ById<FrameworkElement>(window, "BoardContainers")).OfType<Grid>()
+                        .First(g => g.Children.OfType<TextBlock>().Any(t => t.Text.StartsWith("penpot-postgres-1")));
+                    row.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left)
+                        { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
+                    Assert.Equal("penpot-postgres-1", Ui.ById<TextBox>(window, "ProcessFilter").Text);
+                    Assert.Equal(2, Ui.ById<DataGrid>(window, "ProcessGrid").Items.Count);
+                });
             }
             finally
             {
