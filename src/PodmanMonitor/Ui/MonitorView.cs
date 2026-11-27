@@ -131,6 +131,12 @@ namespace PodmanMonitor.Ui
             Id(refresh, "RefreshButton");
             bar.Children.Add(refresh);
 
+            var processes = new Button { Content = "프로세스 스냅샷", Padding = new Thickness(10, 2, 10, 2), Margin = new Thickness(6, 0, 0, 0),
+                ToolTip = "지금 이 순간 서버의 프로세스 목록(CPU·메모리·소속 컨테이너)을 한 번 찍어 창으로 봅니다" };
+            processes.Click += (s, e) => OpenProcesses();
+            Id(processes, "ProcessButton");
+            bar.Children.Add(processes);
+
             _groupBox.Margin = new Thickness(12, 0, 0, 0);
             _groupBox.ToolTip = "compose 프로젝트별로, compose 가 아니면 pod 별로 묶어 보여 줍니다. 머리줄을 누르면 접고 펍니다.";
             _groupBox.IsChecked = Setting("groupByProject") != "0";
@@ -869,6 +875,16 @@ namespace PodmanMonitor.Ui
                 _status.Text = "로그 조회 실패: " + Describe(ex);
             }
         }
+
+        private void OpenProcesses()
+        {
+            if (_ssh == null) { _status.Text = "먼저 호스트에 연결하세요"; return; }
+            new ProcessWindow(Window.GetWindow(this), _ssh, _ssh.Alias, ContainerNames).Show();
+        }
+
+        /// <summary>컨테이너 id → 이름(프로세스 스냅샷의 소속 컨테이너 표시용). 지금 표에 있는 것만.</summary>
+        private System.Collections.Generic.IReadOnlyDictionary<string, string> ContainerNames() =>
+            _rows.Where(r => !string.IsNullOrEmpty(r.Id)).GroupBy(r => r.Id).ToDictionary(g => g.Key, g => g.First().Name);
 
         private void OpenExec(ContainerRow row)
         {
