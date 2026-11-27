@@ -10,6 +10,8 @@ namespace PodmanMonitor.Ui
         public event PropertyChangedEventHandler PropertyChanged;
 
         public string Id { get; private set; }
+        /// <summary>podman ps 와 같은 앞 12자리.</summary>
+        public string ShortId => Id != null && Id.Length > 12 ? Id.Substring(0, 12) : Id;
         public string Name { get; private set; }
         public string Image { get; private set; }
         public string State { get; private set; }

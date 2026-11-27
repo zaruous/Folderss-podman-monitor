@@ -77,8 +77,9 @@ namespace PodmanMonitor.UiTests
                         Assert.True(Ui.ById<FrameworkElement>(window, id) != null, id + " 없음");
                     Assert.Empty(Ui.ById<ComboBox>(window, "HostCombo").Items);
                     var grid = Ui.ById<DataGrid>(window, "ContainerGrid");
-                    Assert.Equal(11, grid.Columns.Count);
-                    Assert.Equal("프로젝트/pod", grid.Columns[1].Header);
+                    Assert.Equal(12, grid.Columns.Count);
+                    Assert.Equal("ID", grid.Columns[1].Header);
+                    Assert.Equal("프로젝트/pod", grid.Columns[2].Header);
                     Assert.Equal(DataGridSelectionMode.Extended, grid.SelectionMode); // 여러 개 골라 한 번에 조작
                     var chart = Ui.ById<FrameworkElement>(window, "HostCpuChart");
                     var gridTop = grid.TranslatePoint(new Point(0, 0), window).Y;

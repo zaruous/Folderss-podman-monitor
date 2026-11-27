@@ -11,7 +11,7 @@
 |---|---|
 | 상단 막대 | 호스트 선택, [호스트 설정…], 갱신 주기(2·3·5·10·30초, 기본 3초), 자동 갱신, 새로고침, 프로젝트별 묶기 |
 | 알림 줄 | 컨테이너 멈춤·사라짐·다시 실행, unhealthy·회복, 디스크·호스트 메모리 90% 넘김을 직전 갱신과 비교해 알림. 창이 비활성이면 작업 표시줄 깜빡임. [기록]·[지우기]. 직접 조작한 컨테이너는 3분간 알리지 않음 |
-| 컨테이너 표 | 이름·프로젝트/pod·상태·상세·CPU(호스트 전체 대비 %, 사용 코어 수)·메모리·네트워크·디스크 I/O·이미지·포트. 상태 색, unhealthy 줄 강조, CPU·메모리 80% 이상 강조. **compose 프로젝트별, compose가 아니면 pod별 묶음**(머리줄에 실행 수·CPU·메모리 합계, 눌러서 접기). pod의 infra 컨테이너는 보이지 않음 |
+| 컨테이너 표 | 이름·ID(앞 12자리)·프로젝트/pod·상태·상세·CPU(호스트 전체 대비 %, 사용 코어 수)·메모리·네트워크·디스크 I/O·이미지·포트. 상태 색, unhealthy 줄 강조, CPU·메모리 80% 이상 강조. **compose 프로젝트별, compose가 아니면 pod별 묶음**(머리줄에 실행 수·CPU·메모리 합계, 눌러서 접기). pod의 infra 컨테이너는 보이지 않음 |
 | 추이 그래프 | 호스트 CPU(사용률·iowait), 호스트 메모리, 컨테이너 CPU·메모리(전체 합계 + 선택한 컨테이너). 구간 5·10·30·60분 |
 | GPU | NVIDIA GPU가 있으면 디스크 위에 GPU별 사용률·메모리 % 추이 그래프(그래프에 마우스를 올리면 GPU 이름). 없으면 디스크만 |
 | 디스크 | 마운트별 사용률 막대(75% 주황, 90% 빨강) |
@@ -125,6 +125,7 @@ tests/PodmanMonitor.UiTests/ ← 화면 시험 (Folderss 없이 zip을 불러 �
 dotnet build src/PodmanMonitor          # → src/PodmanMonitor/bin/Debug/net8.0-windows/PodmanMonitor.zip
 dotnet test tests/PodmanMonitor.Tests   # 단위 시험
 pwsh scripts/ui-test.ps1                # 화면 시험 (숨은 데스크톱)
+scripts\run-standalone.bat              # Folderss 없이 단독 실행 (빌드 후 창 띄움, 설정은 첫 실행 때 Folderss 쪽에서 복사)
 
 # 실제 서버에 붙는 화면 시험까지 (연결 1회 재사용, 컨테이너·디스크 표시 확인)
 $env:PODMAN_MONITOR_LIVE_HOST = '<ssh 별칭>'; pwsh scripts/ui-test.ps1

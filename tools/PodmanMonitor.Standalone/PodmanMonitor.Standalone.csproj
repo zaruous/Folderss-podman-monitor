@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Folderss 없이 Podman 모니터 화면만 띄우는 단독 실행 프로그램(scripts/run-standalone.bat) -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>disable</Nullable>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>PodmanMonitorStandalone</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PodmanMonitor\PodmanMonitor.csproj" />
+    <ProjectReference Include="..\..\contract\Folderss.PluginContract\Folderss.PluginContract.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 테마는 화면 시험이 쓰는 Folderss 테마 사본을 같이 쓴다 -->
+    <EmbeddedResource Include="..\..\tests\PodmanMonitor.UiTests\Themes\*.xaml" LogicalName="Themes.%(Filename).xaml" />
+  </ItemGroup>
+
+</Project>

@@ -188,6 +188,62 @@ else{$o=Invoke-Podman $a $id;if($o.ok){$r='ok'}else{$r=""exit$($o.code)"";[Conso
                 : $"podman logs --tail {tail} --timestamps {id} 2>&1";
         }
 
+        /// <summary>셸 작은따옴표 인용. 안의 ' 는 '\'' 로 바꾼다.</summary>
+        public static string ShellQuote(string s) => "'" + (s ?? "").Replace("'", "'\\''") + "'";
+
+        /// <summary>PowerShell 작은따옴표 문자열. PowerShell 은 ‘ ’ ‚ ‛ 도 작은따옴표로 보므로 같이 두 번 쓴다.</summary>
+        public static string PsQuote(string s) =>
+            "'" + System.Text.RegularExpressions.Regex.Replace(s ?? "", "['‘’‚‛]", m => m.Value + m.Value) + "'";
+
+        /// <summary>id 는 podman 이 준 16진수만 받는다 — 셸에 그대로 들어가므로.</summary>
+        public static string CheckId(string id)
+        {
+            if (string.IsNullOrEmpty(id) || !id.All(Uri.IsHexDigit)) throw new ArgumentException("컨테이너 id 가 올바르지 않습니다");
+            return id;
+        }
+
+        const string ExecMark = "@@EXEC@@";
+
+        /// <summary>컨테이너 안에서 돌릴 sh 스크립트: 직전 작업 폴더로 옮기고, 끝에 종료 코드와 새 작업 폴더를 표시 줄로 붙인다.</summary>
+        static string ExecScript(string command, string cwd) =>
+            (string.IsNullOrEmpty(cwd) ? "" : "cd " + ShellQuote(cwd) + " 2>/dev/null\n")
+            + command + "\nrc=$?; printf '\\n" + ExecMark + " %s %s\\n' \"$rc\" \"$(pwd)\"";
+
+        /// <summary>
+        /// 컨테이너 안에서 명령 한 번 실행(podman exec, tty 없음). 실행마다 새 셸이라 cd 는 cwd 로 이어 준다.
+        /// Windows: PowerShell 5.1 은 네이티브 프로그램 인자 속 큰따옴표를 이스케이프하지 않아 sh -c 로 넘기면 깨지므로
+        /// 스크립트를 표준 입력으로 넘긴다. 전체를 { } 로 묶어 다 읽은 뒤 실행하고(명령이 나머지 스크립트를 읽어 가지 않게) 표준 입력은 /dev/null,
+        /// 파이프가 끝에 붙이는 CRLF 는 마지막 줄을 주석(#)으로 두어 흘린다.
+        /// </summary>
+        public static string Exec(string id, string command, string cwd, RemoteOs os = RemoteOs.Posix)
+        {
+            CheckId(id);
+            var script = ExecScript(command, cwd);
+            if (os != RemoteOs.Windows) return $"podman exec {id} sh -c {ShellQuote(script)} 2>&1";
+            var piped = "{\n" + script + "\n} </dev/null\n#";
+            return PowerShell("$OutputEncoding=New-Object Text.UTF8Encoding $false\n"
+                + PsQuote(piped) + "|& podman exec -i " + id + " sh 2>&1|%{\"$_\"}\nexit $LASTEXITCODE");
+        }
+
+        /// <summary>Exec 출력 → (본문, 종료 코드, 작업 폴더). 표시 줄이 없으면(exit 등) 코드·폴더는 null.</summary>
+        public static (string Output, int? ExitCode, string Cwd) ParseExec(string output)
+        {
+            output = (output ?? "").Replace("\r\n", "\n");
+            var at = output.LastIndexOf("\n" + ExecMark + " ", StringComparison.Ordinal);
+            if (at < 0) return (output, null, null);
+            var tail = output.Substring(at + ExecMark.Length + 2).TrimEnd('\n');
+            var sp = tail.IndexOf(' ');
+            int? code = sp > 0 && int.TryParse(tail.Substring(0, sp), out var c) ? c : (int?)null;
+            return (output.Substring(0, at), code, sp > 0 ? tail.Substring(sp + 1) : null);
+        }
+
+        /// <summary>
+        /// 대화형 터미널용 원격 명령: bash 가 있으면 bash, 없으면 sh.
+        /// 큰따옴표만 쓰고 $ 가 없어서 서버 로그인 셸이 sh·cmd·PowerShell 어느 것이어도 같은 뜻이 된다.
+        /// </summary>
+        public static string InteractiveShell(string id) =>
+            $"podman exec -it {CheckId(id)} sh -c \"command -v bash >/dev/null 2>&1 && exec bash || exec sh\"";
+
         /// <summary>원시 출력을 구획별로 나눈다.</summary>
         public sealed class Sections
         {
