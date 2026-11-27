@@ -26,6 +26,9 @@ namespace PodmanMonitor.Monitoring
         public List<Sample> TotalMem { get; } = new List<Sample>();
         public Dictionary<string, (List<Sample> Cpu, List<Sample> Mem)> PerContainer { get; } =
             new Dictionary<string, (List<Sample>, List<Sample>)>();
+        /// <summary>GPU 번호(nvidia-smi index) → 사용률 %·메모리 % 이력.</summary>
+        public SortedDictionary<int, (List<Sample> Util, List<Sample> Mem)> Gpu { get; } =
+            new SortedDictionary<int, (List<Sample>, List<Sample>)>();
 
         public async Task<Snapshot> CollectAsync(SshConnection ssh, CancellationToken ct = default)
         {
@@ -64,6 +67,7 @@ namespace PodmanMonitor.Monitoring
             }
             snap.Host = host;
             snap.Disks.AddRange(RemoteScript.ParseDf(sec.DiskLines));
+            snap.Gpus.AddRange(RemoteScript.ParseGpus(sec.GpuLines));
 
             // 컨테이너
             var containers = RemoteScript.ParseContainers(sec.ContainersJson);
@@ -110,6 +114,12 @@ namespace PodmanMonitor.Monitoring
                 Add(HostIoWait, new Sample(t, snap.Host.IoWaitPercent ?? 0));
             }
             if (snap.Host.MemTotal > 0) Add(HostMem, new Sample(t, snap.Host.MemPercent));
+            foreach (var g in snap.Gpus)
+            {
+                if (!Gpu.TryGetValue(g.Index, out var gh)) Gpu[g.Index] = gh = (new List<Sample>(), new List<Sample>());
+                if (g.Utilization.HasValue) Add(gh.Util, new Sample(t, g.Utilization.Value));
+                if (g.MemPercent.HasValue) Add(gh.Mem, new Sample(t, g.MemPercent.Value));
+            }
 
             var withStats = snap.Containers.Where(c => c.HasStats).ToList();
             foreach (var c in withStats)

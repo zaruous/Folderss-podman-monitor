@@ -29,6 +29,12 @@ namespace PodmanMonitor.Ui
         static readonly Color HostMemColor = Color.FromRgb(44, 160, 44);
         static readonly Color TotalColor = Color.FromRgb(150, 150, 150);
         static readonly Color SelectedColor = Color.FromRgb(31, 119, 180);
+        /// <summary>GPU 선 색: GPU 마다 (사용률, 메모리) 한 쌍.</summary>
+        static readonly Color[] GpuColors =
+        {
+            Color.FromRgb(148, 103, 189), Color.FromRgb(23, 190, 207), Color.FromRgb(140, 86, 75), Color.FromRgb(188, 189, 34),
+            Color.FromRgb(227, 119, 194), Color.FromRgb(127, 127, 127),
+        };
 
         private readonly IPluginManager _manager;
         private readonly ComboBox _hostCombo = new ComboBox { Width = 180, DisplayMemberPath = nameof(HostEntry.Name) };
@@ -42,6 +48,8 @@ namespace PodmanMonitor.Ui
         private readonly TrendChart _hostMemChart = new TrendChart { Title = "호스트 메모리 %" };
         private readonly TrendChart _cpuChart = new TrendChart { Title = "컨테이너 CPU % (호스트 전체=100%)" };
         private readonly TrendChart _memChart = new TrendChart { Title = "컨테이너 메모리 %" };
+        private readonly TrendChart _gpuChart = new TrendChart { Title = "GPU %" };
+        private Border _gpuCard, _diskCard;
         private readonly StackPanel _disks = new StackPanel { Margin = new Thickness(8, 4, 8, 4) };
         private readonly TextBlock _status = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis };
         private readonly TextBlock _summary = new TextBlock { Margin = new Thickness(12, 0, 0, 0) };
@@ -140,7 +148,7 @@ namespace PodmanMonitor.Ui
             _window.SelectionChanged += (s, e) =>
             {
                 var span = TimeSpan.FromMinutes(int.Parse(((string)_window.SelectedItem).TrimEnd('분')));
-                foreach (var c in new[] { _hostCpuChart, _hostMemChart, _cpuChart, _memChart }) c.Window = span;
+                foreach (var c in new[] { _hostCpuChart, _hostMemChart, _cpuChart, _memChart, _gpuChart }) c.Window = span;
                 UpdateCharts();
             };
             Id(_window, "WindowBox");
@@ -259,10 +267,16 @@ namespace PodmanMonitor.Ui
             diskPanel.Children.Add(diskTitle);
             diskPanel.Children.Add(new ScrollViewer { Content = _disks, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
             Id(_disks, "DiskList");
-            var diskCard = Card(diskPanel);
-            Grid.SetColumn(diskCard, 2);
-            Grid.SetRowSpan(diskCard, 2);
-            charts.Children.Add(diskCard);
+            // 오른쪽 열: GPU 가 있으면 위 GPU 그래프 / 아래 디스크, 없으면 디스크만(UpdateCharts)
+            Id(_gpuChart, "GpuChart");
+            _gpuCard = Card(_gpuChart);
+            _gpuCard.Visibility = Visibility.Collapsed;
+            Grid.SetColumn(_gpuCard, 2);
+            charts.Children.Add(_gpuCard);
+            _diskCard = Card(diskPanel);
+            Grid.SetColumn(_diskCard, 2);
+            Grid.SetRowSpan(_diskCard, 2);
+            charts.Children.Add(_diskCard);
             body.Children.Add(charts);
             return body;
         }
@@ -694,6 +708,14 @@ namespace PodmanMonitor.Ui
             if (h.MemTotal > 0) parts.Add($"메모리 {h.MemPercent:0.#}% ({Format.Bytes(h.MemTotal - h.MemAvailable)}/{Format.Bytes(h.MemTotal)})");
             if (!string.IsNullOrEmpty(h.LoadAverage)) parts.Add($"load {h.LoadAverage} ({h.Cores}코어)");
             else if (h.MemTotal > 0) parts.Add($"{h.Cores}코어"); // Windows 에는 load average 가 없다
+            foreach (var g in snap.Gpus)
+            {
+                var gpu = snap.Gpus.Count > 1 ? $"GPU{g.Index}" : "GPU";
+                if (g.Utilization.HasValue) gpu += $" {g.Utilization:0.#}%";
+                if (g.MemTotal > 0) gpu += $" ({Format.Bytes(g.MemUsed)}/{Format.Bytes(g.MemTotal)})";
+                parts.Add(gpu);
+            }
+            _gpuChart.ToolTip = snap.Gpus.Count == 0 ? null : string.Join("\n", snap.Gpus.Select(g => $"GPU{g.Index}: {g.Name}"));
             parts.Add($"컨테이너 실행 {snap.Containers.Count(c => c.State == "running")} / 전체 {snap.Containers.Count}");
             _summary.Text = string.Join(" · ", parts);
 
@@ -745,6 +767,21 @@ namespace PodmanMonitor.Ui
             }
             _cpuChart.SetSeries(cpu);
             _memChart.SetSeries(mem);
+
+            // GPU: 한 번이라도 보였으면 카드를 둔다(nvidia-smi 가 잠깐 실패해도 깜빡이지 않게). 다른 호스트로 바꾸면 새 Collector 라 사라진다
+            var gpus = new System.Collections.Generic.List<ChartSeries>();
+            int k = 0;
+            foreach (var g in c.Gpu)
+            {
+                var prefix = c.Gpu.Count > 1 ? $"GPU{g.Key} " : "";
+                gpus.Add(new ChartSeries(prefix + "사용률", GpuColors[k++ % GpuColors.Length], g.Value.Util));
+                gpus.Add(new ChartSeries(prefix + "메모리", GpuColors[k++ % GpuColors.Length], g.Value.Mem, 1.5));
+            }
+            _gpuChart.SetSeries(gpus);
+            bool hasGpu = c.Gpu.Count > 0;
+            _gpuCard.Visibility = hasGpu ? Visibility.Visible : Visibility.Collapsed;
+            Grid.SetRow(_diskCard, hasGpu ? 1 : 0);
+            Grid.SetRowSpan(_diskCard, hasGpu ? 1 : 2);
         }
 
         private async Task ContainerActionAsync(System.Collections.Generic.List<ContainerRow> rows, string action, string label)

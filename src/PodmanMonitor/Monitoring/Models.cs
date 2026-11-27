@@ -61,12 +61,25 @@ namespace PodmanMonitor.Monitoring
         public double Percent => Used + Avail > 0 ? 100.0 * Used / (Used + Avail) : 0;
     }
 
+    /// <summary>NVIDIA GPU 한 개(nvidia-smi). 값을 못 주는 GPU 는 [N/A] — 사용률은 null, 메모리는 0.</summary>
+    public sealed class GpuInfo
+    {
+        public int Index { get; set; }
+        public string Name { get; set; }
+        public double? Utilization { get; set; }
+        public long MemUsed { get; set; }
+        public long MemTotal { get; set; }
+        public double? MemPercent => MemTotal > 0 ? 100.0 * MemUsed / MemTotal : (double?)null;
+    }
+
     public sealed class Snapshot
     {
         public DateTime Time { get; set; }
         public List<ContainerInfo> Containers { get; } = new List<ContainerInfo>();
         public HostInfo Host { get; set; }
         public List<DiskInfo> Disks { get; } = new List<DiskInfo>();
+        /// <summary>호스트의 NVIDIA GPU. nvidia-smi 가 없으면 비어 있다.</summary>
+        public List<GpuInfo> Gpus { get; } = new List<GpuInfo>();
         /// <summary>조회는 됐지만 일부를 읽지 못한 이유(예: rootless + cgroup v1 이라 컨테이너 통계 없음). 상태줄에 보인다.</summary>
         public List<string> Warnings { get; } = new List<string>();
         /// <summary>원격 명령 수행 시간(ms).</summary>

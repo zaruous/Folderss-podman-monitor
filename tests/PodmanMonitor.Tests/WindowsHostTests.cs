@@ -65,6 +65,7 @@ namespace PodmanMonitor.Tests
             }
             Assert.Contains("@@PS@@", Decode(RemoteScript.CollectFor(RemoteOs.Windows)));
             Assert.Contains("Win32_LogicalDisk", Decode(RemoteScript.CollectFor(RemoteOs.Windows)));
+            Assert.Contains("nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits", Decode(RemoteScript.CollectFor(RemoteOs.Windows)));
             Assert.Contains("@@OK@@", Decode(RemoteScript.ProbeFor(RemoteOs.Windows)));
             // Linux 는 그대로 sh
             Assert.Same(RemoteScript.Collect, RemoteScript.CollectFor(RemoteOs.Posix));

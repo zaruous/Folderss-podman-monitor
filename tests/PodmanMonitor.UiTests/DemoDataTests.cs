@@ -62,6 +62,8 @@ namespace PodmanMonitor.UiTests
                     Assert.Contains("storage (pod)", Ui.Texts(grid));
                     Assert.Contains("(compose·pod 아님)", Ui.Texts(grid));
                     Assert.Equal(Visibility.Collapsed, Ui.ById<Border>(window, "AlertBar").Visibility);
+                    Assert.True(Ui.ById<FrameworkElement>(window, "GpuChart").IsVisible, "GPU 그래프 카드");
+                    Assert.Contains("GPU ", Ui.ById<TextBlock>(window, "SummaryText").Text);
                     SelectByName(grid, "penpot-backend-1");
                 });
                 await Task.Delay(500);
@@ -288,6 +290,9 @@ namespace PodmanMonitor.UiTests
                 sb.Append($"/dev/nvme0n1p2 {size} {used} {size - used} 88% /\n");
                 sb.Append("/dev/nvme0n1p1 1127000000 6440000 1120560000 1% /boot/efi\n");
                 sb.Append("/dev/sdb1 2000000000000 640000000000 1360000000000 32% /mnt/backup\n");
+                // nvidia-smi csv: GPU 하나, 사용률 40% 안팎, 메모리 16GiB 중 약 6GiB
+                sb.Append("@@GPU@@\n");
+                sb.Append($"0, NVIDIA RTX A4000, {40 + 25 * Math.Sin(k * 0.2):0}, {6100 + 300 * Math.Sin(k * 0.1):0}, 16376\n");
                 return sb.ToString();
             }
 

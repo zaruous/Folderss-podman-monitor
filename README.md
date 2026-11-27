@@ -1,6 +1,6 @@
 # Folderss Podman 모니터
 
-[Folderss](https://github.com/zaruous/Folderss) 플러그인입니다. SSH로 접속한 서버의 **Podman 컨테이너 상태**와 **호스트 CPU·메모리·디스크**를 한 창에서 보여 줍니다.
+[Folderss](https://github.com/zaruous/Folderss) 플러그인입니다. SSH로 접속한 서버의 **Podman 컨테이너 상태**와 **호스트 CPU·메모리·디스크·NVIDIA GPU**를 한 창에서 보여 줍니다.
 서버에는 아무것도 설치하지 않습니다(podman만 있으면 됩니다).
 
 `⋯ 메뉴 > 플러그인 > Podman 모니터`
@@ -13,9 +13,10 @@
 | 알림 줄 | 컨테이너 멈춤·사라짐·다시 실행, unhealthy·회복, 디스크·호스트 메모리 90% 넘김을 직전 갱신과 비교해 알림. 창이 비활성이면 작업 표시줄 깜빡임. [기록]·[지우기]. 직접 조작한 컨테이너는 3분간 알리지 않음 |
 | 컨테이너 표 | 이름·ID(앞 12자리)·프로젝트/pod·상태·상세·CPU(호스트 전체 대비 %, 사용 코어 수)·메모리·네트워크·디스크 I/O·이미지·포트. 상태 색, unhealthy 줄 강조, CPU·메모리 80% 이상 강조. **compose 프로젝트별, compose가 아니면 pod별 묶음**(머리줄에 실행 수·CPU·메모리 합계, 눌러서 접기). pod의 infra 컨테이너는 보이지 않음 |
 | 추이 그래프 | 호스트 CPU(사용률·iowait), 호스트 메모리, 컨테이너 CPU·메모리(전체 합계 + 선택한 컨테이너). 구간 5·10·30·60분 |
+| GPU | NVIDIA GPU가 있으면 디스크 위에 GPU별 사용률·메모리 % 추이 그래프(그래프에 마우스를 올리면 GPU 이름). 없으면 디스크만 |
 | 디스크 | 마운트별 사용률 막대(75% 주황, 90% 빨강) |
-| 상태줄 | 호스트 CPU·메모리·load·코어 수, 실행/전체 컨테이너 수, 조회 시간, 맺은 SSH 연결 수. 통계를 못 읽으면 `⚠` 이유 |
-| 우클릭·더블클릭 | 로그 보기(최근 200줄), **명령 실행…**(컨테이너 안에서 `podman exec`, 결과를 창에 이어 붙임, cd 유지·↑↓ 기록. Windows 서버도 됨), **터미널 열기**(ssh.exe 새 콘솔 창으로 컨테이너 셸 — bash 없으면 sh), ID 복사, start·stop·restart(stop·restart는 확인). Ctrl·Shift로 여러 줄을 고르면 한 번에, 같은 묶음이면 **프로젝트 전체·pod 전체**를 한 번에 조작. compose **의존 순서**를 지킴(시작은 DB 먼저·healthy 대기, 중지는 역순). 여러 개도 SSH 채널 하나에서 차례로 실행 |
+| 상태줄 | 호스트 CPU·메모리·load·코어 수, GPU 사용률·메모리, 실행/전체 컨테이너 수, 조회 시간, 맺은 SSH 연결 수. 통계를 못 읽으면 `⚠` 이유 |
+| 우클릭·더블클릭 | 로그 보기(최근 200줄), start·stop·restart(stop·restart는 확인). Ctrl·Shift로 여러 줄을 고르면 한 번에, 같은 묶음이면 **프로젝트 전체·pod 전체**를 한 번에 조작. compose **의존 순서**를 지킴(시작은 DB 먼저·healthy 대기, 중지는 역순). 여러 개도 SSH 채널 하나에서 차례로 실행 |
 
 ---
 
@@ -29,11 +30,13 @@ Folderss(플러그인) ──SSH 연결 1개 유지(SSH.NET)──▶ 서버 (�
    podman stats --no-stream --format '{{json .}}' → 실행 중인 컨테이너의 누적 CPU 시간·메모리·네트워크·블록 I/O
    /proc/stat · /proc/meminfo · /proc/loadavg · nproc → 호스트 CPU·메모리·부하
    df                                          → 디스크
+   nvidia-smi --query-gpu=… (있을 때만)         → GPU 사용률·메모리
 ```
 
 - **연결 재사용**: 창마다 SSH 연결 하나를 열어 두고, 갱신·로그·컨테이너 조작은 그 연결에서 채널만 새로 엽니다. 끊기면 다음 갱신 때 다시 연결합니다. 창을 닫으면 연결도 끊습니다.
 - **데몬 없음**: Podman은 소켓·데몬이 없어도 되므로 `podman.socket`을 켤 필요가 없습니다. podman 표준 오류(rootless 경고 등)는 JSON과 섞이지 않게 따로 받습니다.
 - **CPU %**: 직전 갱신과의 누적 CPU 시간 차이 ÷ 지난 시간으로 사용 코어 수를 구하고, 호스트 코어 수(`nproc`)로 나눠 **호스트 전체 = 100%** 기준으로 보여 줍니다(괄호 안은 사용 코어 수). 그래서 연결 직후 첫 갱신에는 CPU가 "측정 중"으로 나오고 두 번째부터 값이 나옵니다.
+- **GPU**: 서버에 `nvidia-smi`가 있을 때만 읽습니다(NVIDIA만, 호스트 전체 기준 — 컨테이너별 GPU 사용량은 보지 않습니다). 드라이버 문제로 멈추면 5초 뒤 끊고(`timeout`이 있을 때) 상태줄에 `⚠ GPU 정보를 읽지 못했습니다`가 나옵니다.
 - **조작**: `podman start|stop|restart <id>`. 이미 그 상태여도 podman은 성공으로 끝납니다. 실패하면 상태줄에 종료 코드와 podman 오류 문구가 나옵니다.
 - **healthy 대기**(compose `service_healthy` 의존): 상태를 읽기만 하지 않고 `podman healthcheck run`으로 검사를 직접 돌립니다(최대 90초). podman의 주기 검사는 systemd 타이머로 돌아서, systemd 사용자 세션이 없으면(rootless 계정에 linger가 꺼져 있는 등) 상태가 계속 `starting`에 머물기 때문입니다.
 
@@ -44,6 +47,7 @@ Folderss(플러그인) ──SSH 연결 1개 유지(SSH.NET)──▶ 서버 (�
 - 컨테이너: `podman.exe`가 podman machine(WSL VM)에 붙으므로 JSON은 Linux와 같습니다. VM이 꺼져 있으면 podman 오류가 상태줄에 나옵니다(`podman machine start`).
 - 호스트 CPU: 성능 카운터(`Win32_PerfRawData_PerfOS_Processor`)의 사용자·커널·유휴 시간 차이. iowait·load average는 없습니다.
 - 메모리·디스크: `Win32_OperatingSystem`, `Win32_LogicalDisk`(로컬 드라이브).
+- GPU: Windows 호스트의 `nvidia-smi`(드라이버에 포함). 멈춤 대비 시간 제한은 없습니다.
 - 컨테이너 CPU %는 Windows 호스트 코어 수 기준입니다(VM에 준 코어 수가 아님).
 - 여러 컨테이너를 한 번에 조작할 때 명령 길이 때문에 id는 앞 12자리만 씁니다. 너무 많으면(약 90단계 넘음) 나눠서 조작하라고 알립니다.
 
