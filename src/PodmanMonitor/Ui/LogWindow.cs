@@ -19,6 +19,7 @@ namespace PodmanMonitor.Ui
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
                 TextWrapping = TextWrapping.NoWrap,
+                VerticalContentAlignment = VerticalAlignment.Top, // Folderss 테마의 TextBox 기본값은 Center
                 BorderThickness = new Thickness(0),
                 Padding = new Thickness(6),
             };

@@ -89,6 +89,9 @@ namespace PodmanMonitor.UiTests
                     var items = Ui.ContextMenu(grid, null);
                     _out.WriteLine("메뉴(한 줄): " + string.Join(" · ", items));
                     Assert.Contains(items, t => t.StartsWith("'penpot' 프로젝트 전체 중지 (6개)"));
+                    Assert.Contains("명령 실행…", items);
+                    Assert.Contains("터미널 열기 (ssh 새 창)", items);
+                    Assert.Contains("ID 복사", items);
                     SelectByName(grid, "penpot-backend-1", "penpot-postgres-1", "penpot-valkey-1");
                 });
                 await Task.Delay(200);

@@ -318,6 +318,7 @@ namespace PodmanMonitor.Ui
             _grid.RowStyle = row;
 
             Column("이름", nameof(ContainerRow.Name));
+            Column("ID", nameof(ContainerRow.ShortId), Mono());
             Column("프로젝트/pod", nameof(ContainerRow.Project));
             Column("상태", nameof(ContainerRow.State), StateStyle());
             Column("상세", nameof(ContainerRow.Status));
@@ -393,6 +394,13 @@ namespace PodmanMonitor.Ui
             return style;
         }
 
+        private static Style Mono()
+        {
+            var style = new Style(typeof(TextBlock));
+            style.Setters.Add(new Setter(TextBlock.FontFamilyProperty, new FontFamily("Consolas")));
+            return style;
+        }
+
         private static Style HotStyle(string flag)
         {
             var style = new Style(typeof(TextBlock));
@@ -420,7 +428,18 @@ namespace PodmanMonitor.Ui
         {
             if (rows.Count == 1)
             {
+                var row = rows[0];
                 menu.Items.Add(MenuItem("로그 보기 (최근 200줄)", async () => await ShowLogsAsync()));
+                var running = row.State == "running";
+                var exec = MenuItem("명령 실행…", () => OpenExec(row));
+                var term = MenuItem("터미널 열기 (ssh 새 창)", () => OpenTerminal(row));
+                exec.IsEnabled = term.IsEnabled = running;
+                if (!running) exec.ToolTip = term.ToolTip = "실행 중인 컨테이너에서만 됩니다";
+                ToolTipService.SetShowOnDisabled(exec, true);
+                ToolTipService.SetShowOnDisabled(term, true);
+                menu.Items.Add(exec);
+                menu.Items.Add(term);
+                menu.Items.Add(MenuItem("ID 복사", () => CopyText(row.Id, "ID")));
                 menu.Items.Add(new Separator());
             }
             var suffix = rows.Count == 1 ? "" : $" — 고른 {rows.Count}개";
@@ -811,6 +830,40 @@ namespace PodmanMonitor.Ui
             catch (Exception ex)
             {
                 _status.Text = "로그 조회 실패: " + Describe(ex);
+            }
+        }
+
+        private void OpenExec(ContainerRow row)
+        {
+            if (_ssh == null) return;
+            new ExecWindow(Window.GetWindow(this), _ssh, row.Id, row.Name, () => OpenTerminal(row)).Show();
+        }
+
+        private void OpenTerminal(ContainerRow row)
+        {
+            try
+            {
+                var target = _ssh?.Target;
+                if (target == null) { _status.Text = "아직 연결되지 않았습니다"; return; }
+                SshTerminal.Open(target, RemoteScript.InteractiveShell(row.Id));
+                _status.Text = $"{row.Name} 터미널을 새 창으로 열었습니다";
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "터미널 열기 실패: " + Describe(ex);
+            }
+        }
+
+        private void CopyText(string text, string what)
+        {
+            try
+            {
+                Clipboard.SetText(text ?? "");
+                _status.Text = $"{what} 복사함: {text}";
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "복사 실패: " + ex.Message; // 다른 프로그램이 클립보드를 잡고 있을 때
             }
         }
 
